@@ -68,7 +68,7 @@ jobs:
       # Download the JAR produced by the CI build-and-package job.
       # run-id is required to fetch artifacts from an upstream workflow_run.
       - name: Download app-jar artifact from CI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: app-jar
           path: target/
@@ -119,7 +119,7 @@ jobs:
 
     steps:
       - name: Download container image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: /tmp/
@@ -176,7 +176,7 @@ jobs:
 
     steps:
       - name: Download container image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: /tmp/
