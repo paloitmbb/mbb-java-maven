@@ -159,7 +159,7 @@ jobs:
           cache: maven
 
       - name: Submit dependency graph
-        uses: advanced-security/maven-dependency-submission-action@v4
+        uses: advanced-security/maven-dependency-submission-action@v5
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
