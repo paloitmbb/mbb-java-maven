@@ -1,0 +1,21 @@
+{
+    "name": "Java",
+    "image": "mcr.microsoft.com/devcontainers/java:1-21-bookworm",
+    "postCreateCommand": "if [ -f mvnw ]; then ./mvnw dependency:resolve; elif [ -f pom.xml ]; then mvn dependency:resolve; elif [ -f gradlew ]; then ./gradlew dependencies; fi",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "java.configuration.updateBuildConfiguration": "automatic",
+                "[java]": {
+                    "editor.defaultFormatter": "redhat.java",
+                    "editor.formatOnSave": true
+                }
+            },
+            "extensions": [
+                "vscjava.vscode-java-pack",
+                "eamodio.gitlens"
+            ]
+        }
+    },
+    "remoteUser": "vscode"
+}

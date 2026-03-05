@@ -1,0 +1,238 @@
+# =============================================================================
+# Container Workflow
+# =============================================================================
+# Triggers on successful CI completion (workflow_run).
+# Chain: build-image → scan-image → attest-and-push
+#
+# CRITICAL: name must be exactly "Container" — referenced by deploy.yml's
+# workflow_run trigger. Never rename this workflow.
+# =============================================================================
+name: Container
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+# ---------------------------------------------------------------------------
+# Run only when the upstream CI succeeded (or triggered manually)
+# ---------------------------------------------------------------------------
+# NOTE: This top-level if applies to the entire run; individual jobs inherit it.
+# Individual job conditions are used for branch-restricted push (attest-and-push).
+# ---------------------------------------------------------------------------
+
+concurrency:
+  group: container-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# ---------------------------------------------------------------------------
+# Workflow-level env — use workflow_run SHA so tags are always correct.
+# In workflow_run context github.sha resolves to the default branch HEAD,
+# NOT the actual triggering commit.  Always prefer head_sha.
+# ---------------------------------------------------------------------------
+env:
+  COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: build-image
+  # Downloads the pre-built app.jar from CI, builds Docker image, saves to
+  # tarball — NO Maven / JDK in this job (build-once principle).
+  # ─────────────────────────────────────────────────────────────────────────
+  build-image:
+    name: Build Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Download the JAR produced by the CI build-and-package job.
+      # run-id is required to fetch artifacts from an upstream workflow_run.
+      - name: Download app-jar artifact from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target/
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve build metadata
+        id: meta
+        run: |
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: app:${{ env.COMMIT_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/image.tar
+          build-args: |
+            APP_VERSION=${{ env.COMMIT_SHA }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+
+      - name: Upload container image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: scan-image
+  # Loads the image tarball, runs Trivy with exit-code 1 on CRITICAL/HIGH,
+  # uploads SARIF to the Security tab, and saves the report as an artifact.
+  # ─────────────────────────────────────────────────────────────────────────
+  scan-image:
+    name: Scan Image
+    runs-on: ubuntu-latest
+    needs: [build-image]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Download container image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/
+
+      - name: Load Docker image
+        run: docker load --input /tmp/image.tar
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: app:${{ env.COMMIT_SHA }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+      - name: Upload Trivy report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-results.sarif
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: attest-and-push
+  # Loads the scanned image, logs into Azure via OIDC (no stored creds),
+  # pushes with immutable SHA-only tag, generates SLSA provenance attestation,
+  # and produces the deploy-metadata artifact consumed by deploy.yml.
+  #
+  # Only runs on main / develop branches (or workflow_dispatch).
+  # ─────────────────────────────────────────────────────────────────────────
+  attest-and-push:
+    name: Attest and Push
+    runs-on: ubuntu-latest
+    needs: [scan-image]
+    timeout-minutes: 15
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.head_branch == 'main' ||
+      github.event.workflow_run.head_branch == 'develop'
+    permissions:
+      contents: read
+      id-token: write       # Required for Azure OIDC and SLSA attestation
+      attestations: write   # Required for actions/attest-build-provenance
+
+    steps:
+      - name: Download container image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/
+
+      - name: Load Docker image
+        run: docker load --input /tmp/image.tar
+
+      # Azure OIDC login — no stored credentials, short-lived token only.
+      # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}       # TODO: set AZURE_CLIENT_ID secret
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}       # TODO: set AZURE_TENANT_ID secret
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # TODO: set AZURE_SUBSCRIPTION_ID secret
+
+      # ACR login via Azure CLI — no username/password.
+      # TODO: set ACR_LOGIN_SERVER variable (e.g. myregistry.azurecr.io)
+      - name: ACR login
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ vars.ACR_LOGIN_SERVER }} # TODO: set ACR_LOGIN_SERVER variable
+
+      # Tag with immutable SHA-only tag and push. Capture digest for attestation.
+      - name: Tag, push, and capture digest
+        id: push
+        run: |
+          SHA="${{ env.COMMIT_SHA }}"
+          IMAGE="${{ vars.ACR_LOGIN_SERVER }}/${{ vars.ACR_REPOSITORY }}:${SHA}"
+          docker tag "app:${SHA}" "${IMAGE}"
+          docker push "${IMAGE}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" | cut -d@ -f2)
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # SLSA Level 2 provenance — links the image to this workflow run.
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.ACR_REPOSITORY }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # Write deploy metadata files consumed by deploy.yml.
+      - name: Export deploy metadata
+        run: |
+          echo "${{ env.COMMIT_SHA }}" > /tmp/commit-sha
+          echo "${{ steps.push.outputs.image }}" > /tmp/image-tag
+          echo "${{ steps.push.outputs.digest }}" > /tmp/image-digest
+
+      - name: Upload deploy-metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-metadata
+          path: |
+            /tmp/commit-sha
+            /tmp/image-tag
+            /tmp/image-digest
+          retention-days: 7

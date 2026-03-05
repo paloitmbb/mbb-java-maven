@@ -1,0 +1,221 @@
+# =============================================================================
+# Deploy Workflow
+# =============================================================================
+# Triggers on successful Container workflow completion (workflow_run).
+# Chain: deploy-staging → deploy-production (main only, ≥2 approvers required)
+#
+# CRITICAL: cancel-in-progress MUST be false — interrupting a kubectl rollout
+# can leave pods in inconsistent states and cause data corruption.
+#
+# Image tag is read from the deploy-metadata artifact produced by container.yml.
+# Never re-derive the SHA here — it can drift across workflow_run hops.
+# =============================================================================
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ['Container']  # CRITICAL: must match name: in container.yml exactly
+    types: [completed]
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false  # CRITICAL: Never cancel in-progress deployments
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Job 1: deploy-staging
+  # Deploys to staging AKS for both develop and main branches.
+  # Downloads deploy-metadata artifact from the upstream Container run,
+  # sets the image via kubectl, waits for rollout, health-checks, and
+  # automatically rolls back if any step fails.
+  # ---------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event_name == 'workflow_dispatch'
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write  # Required for Azure OIDC
+      actions: read    # Required for actions/download-artifact@v4 with run-id (cross-workflow)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Read image tag and digest from the artifact produced by container.yml.
+      # Using run-id from workflow_run ensures we deploy the exact image that
+      # was scanned and attested — never re-derive from github.sha.
+      - name: Download deploy-metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-metadata
+          run-id: ${{ github.event.workflow_run.id }}  # Upstream Container run
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read deploy metadata
+        id: meta
+        run: |
+          echo "sha=$(cat commit-sha)"    >> "$GITHUB_OUTPUT"
+          echo "image=$(cat image-tag)"   >> "$GITHUB_OUTPUT"
+          echo "digest=$(cat image-digest)" >> "$GITHUB_OUTPUT"
+
+      # Azure OIDC — no stored credentials, short-lived token only.
+      # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}            # TODO: set AZURE_CLIENT_ID secret
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}            # TODO: set AZURE_TENANT_ID secret
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # TODO: set AZURE_SUBSCRIPTION_ID secret
+
+      # TODO: set AKS_CLUSTER_NAME_STAGING and AKS_RESOURCE_GROUP_STAGING variables
+      - name: Set AKS context (staging)
+        uses: azure/aks-set-context@v4
+        with:
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME_STAGING }}  # TODO: set AKS_CLUSTER_NAME_STAGING variable
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP_STAGING }} # TODO: set AKS_RESOURCE_GROUP_STAGING variable
+
+      # image-tag file contains the full image reference, e.g.:
+      # myregistry.azurecr.io/hello-java:sha-abc1234
+      # TODO: set APP_NAME variable (must match Deployment metadata.name and container name)
+      - name: Deploy image to staging
+        run: |
+          kubectl set image deployment/${{ vars.APP_NAME }} \
+            ${{ vars.APP_NAME }}=${{ steps.meta.outputs.image }} \
+            -n staging  # TODO: set APP_NAME variable
+
+      - name: Wait for rollout (staging)
+        run: |
+          kubectl rollout status deployment/${{ vars.APP_NAME }} \
+            -n staging \
+            --timeout=5m
+
+      # TODO: set STAGING_HEALTH_URL variable (e.g. https://staging.example.com)
+      # Spring Boot Actuator must be on the classpath for /actuator/health to work.
+      - name: Health check (staging)
+        run: |
+          curl --fail \
+               --retry 5 \
+               --retry-delay 10 \
+               --retry-connrefused \
+               ${{ vars.STAGING_HEALTH_URL }}/actuator/health  # TODO: set STAGING_HEALTH_URL variable
+
+      # ONLY runs when a previous step has failed — rolls back to the last
+      # known-good revision. Using if: failure() (NOT if: always()) ensures
+      # successful deployments are never inadvertently reverted.
+      - name: Rollback on failure (staging)
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/${{ vars.APP_NAME }} -n staging
+          kubectl rollout status deployment/${{ vars.APP_NAME }} -n staging
+
+  # ---------------------------------------------------------------------------
+  # Job 2: deploy-production
+  # Runs only when the upstream branch is main (branch gate) and requires
+  # ≥2 required reviewers configured on the production environment in
+  # repository Settings → Environments → production.
+  # Same deploy/health-check/rollback pattern as staging.
+  # ---------------------------------------------------------------------------
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    timeout-minutes: 20
+    # Branch gate — production deploys are restricted to main only.
+    # workflow_dispatch is allowed only when triggered from main.
+    if: |
+      github.event.workflow_run.head_branch == 'main' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    environment: production  # MUST have ≥2 required reviewers in repo settings
+    permissions:
+      contents: read
+      id-token: write  # Required for Azure OIDC
+      actions: read    # Required for actions/download-artifact@v4 with run-id (cross-workflow)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Same artifact as staging — ensures prod deploys the exact same image
+      # that was validated in staging.
+      - name: Download deploy-metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-metadata
+          run-id: ${{ github.event.workflow_run.id }}  # Upstream Container run
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read deploy metadata
+        id: meta
+        run: |
+          echo "sha=$(cat commit-sha)"    >> "$GITHUB_OUTPUT"
+          echo "image=$(cat image-tag)"   >> "$GITHUB_OUTPUT"
+          echo "digest=$(cat image-digest)" >> "$GITHUB_OUTPUT"
+
+      # Azure OIDC — production federated credential (separate app registration
+      # recommended to isolate prod access from staging).
+      # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}            # TODO: set AZURE_CLIENT_ID secret
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}            # TODO: set AZURE_TENANT_ID secret
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # TODO: set AZURE_SUBSCRIPTION_ID secret
+
+      # TODO: set AKS_CLUSTER_NAME_PROD and AKS_RESOURCE_GROUP_PROD variables
+      - name: Set AKS context (production)
+        uses: azure/aks-set-context@v4
+        with:
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME_PROD }}  # TODO: set AKS_CLUSTER_NAME_PROD variable
+          resource-group: ${{ vars.AKS_RESOURCE_GROUP_PROD }} # TODO: set AKS_RESOURCE_GROUP_PROD variable
+
+      # TODO: set APP_NAME variable (must match Deployment metadata.name and container name)
+      - name: Deploy image to production
+        run: |
+          kubectl set image deployment/${{ vars.APP_NAME }} \
+            ${{ vars.APP_NAME }}=${{ steps.meta.outputs.image }} \
+            -n production  # TODO: set APP_NAME variable
+
+      # Production rollout timeout is longer (10m) to accommodate larger clusters
+      # and slower rollout strategies.
+      - name: Wait for rollout (production)
+        run: |
+          kubectl rollout status deployment/${{ vars.APP_NAME }} \
+            -n production \
+            --timeout=10m
+
+      # TODO: set PRODUCTION_HEALTH_URL variable (e.g. https://app.example.com)
+      # More retries and longer delay than staging — production traffic is real.
+      - name: Health check (production)
+        run: |
+          curl --fail \
+               --retry 10 \
+               --retry-delay 15 \
+               --retry-connrefused \
+               ${{ vars.PRODUCTION_HEALTH_URL }}/actuator/health  # TODO: set PRODUCTION_HEALTH_URL variable
+
+      # Same rollback guard as staging: if: failure() prevents accidental
+      # reversion of a successful production deployment.
+      - name: Rollback on failure (production)
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/${{ vars.APP_NAME }} -n production
+          kubectl rollout status deployment/${{ vars.APP_NAME }} -n production
