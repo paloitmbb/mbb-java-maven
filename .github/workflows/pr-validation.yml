@@ -184,8 +184,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 5: TruffleHog secrets scan (runs fully in parallel — no Maven)
-  # Uses TruffleHog OSS — free for all repo types including org repos.
-  # Replaces gitleaks/gitleaks-action which requires a paid license for org repos.
+  # Uses TruffleHog OSS binary directly (not the GitHub Action) to avoid the
+  # AGPL-3.0 license of the trufflesecurity/trufflehog action being flagged by
+  # the dependency-review-action, which denies AGPL-3.0 licensed dependencies.
   # ─────────────────────────────────────────────────────────────────────────────
   secrets-scan:
     name: Secrets Scan
@@ -200,13 +201,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install TruffleHog
+        run: |
+          set -eo pipefail
+          curl -sSfL "https://github.com/trufflesecurity/trufflehog/releases/download/v3.93.7/trufflehog_3.93.7_linux_amd64.tar.gz" \
+            | sudo tar -xzf - -C /usr/local/bin trufflehog
+
       - name: Detect secrets with TruffleHog
-        uses: trufflesecurity/trufflehog@v3.93.7
-        with:
-          path: ./
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --only-verified
+        run: |
+          trufflehog git file://. \
+            --since-commit "${{ github.event.pull_request.base.sha }}" \
+            --only-verified \
+            --fail
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 6: Dependency review — checks new deps for vulns/license issues
