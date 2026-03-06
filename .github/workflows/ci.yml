@@ -123,7 +123,7 @@ jobs:
       - name: Upload SARIF to GitHub Security
         if: always()
         continue-on-error: true  # Requires GitHub Advanced Security; see https://github.com/paloitmbb/mbb-java-maven/settings/security_analysis
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: target/dependency-check-report.sarif
           category: owasp-dependency-check
@@ -188,7 +188,7 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: java-kotlin
           queries: security-and-quality
@@ -204,6 +204,6 @@ jobs:
         run: mvn --batch-mode compile -DskipTests
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:java
