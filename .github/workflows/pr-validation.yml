@@ -52,6 +52,7 @@ jobs:
     permissions:
       contents: read
       checks: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,7 +78,7 @@ jobs:
         run: mvn --batch-mode --no-transfer-progress jacoco:report
 
       - name: Enforce coverage gate (≥80% line coverage)
-        run: mvn --batch-mode --no-transfer-progress jacoco:check
+        run: mvn --batch-mode --no-transfer-progress jacoco:check@check
 
       - name: Publish test results
         if: always()
@@ -182,7 +183,9 @@ jobs:
           category: /language:java
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 5: Gitleaks secrets scan (runs fully in parallel — no Maven)
+  # Job 5: TruffleHog secrets scan (runs fully in parallel — no Maven)
+  # Uses TruffleHog OSS — free for all repo types including org repos.
+  # Replaces gitleaks/gitleaks-action which requires a paid license for org repos.
   # ─────────────────────────────────────────────────────────────────────────────
   secrets-scan:
     name: Secrets Scan
@@ -191,19 +194,24 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout (full history for Gitleaks)
+      - name: Checkout (full history for TruffleHog)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Detect secrets with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # TODO: set GITLEAKS_LICENSE secret
+      - name: Detect secrets with TruffleHog
+        uses: trufflesecurity/trufflehog@v3.93.7
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 6: Dependency review — checks new deps for vulns/license issues
+  # Requires: Dependency graph enabled + GitHub Advanced Security (GHAS).
+  # Enable both at: https://github.com/paloitmbb/mbb-java-maven/settings/security_analysis
   # ─────────────────────────────────────────────────────────────────────────────
   dependency-review:
     name: Dependency Review
