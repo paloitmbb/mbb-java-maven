@@ -128,7 +128,7 @@ jobs:
         run: docker load --input /tmp/image.tar
 
       - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@0.34.2
         with:
           image-ref: app:${{ env.COMMIT_SHA }}
           format: sarif
