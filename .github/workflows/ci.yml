@@ -54,7 +54,7 @@ jobs:
         run: mvn --batch-mode --no-transfer-progress jacoco:report
 
       - name: Enforce coverage gate (>=80% line coverage)
-        run: mvn --batch-mode --no-transfer-progress jacoco:check
+        run: mvn --batch-mode --no-transfer-progress jacoco:check@check
 
       - name: Publish test results
         if: always()
