@@ -48,7 +48,7 @@ jobs:
     permissions:
       contents: read
       id-token: write  # Required for Azure OIDC
-      actions: read    # Required for actions/download-artifact@v4 with run-id (cross-workflow)
+      actions: read    # Required for actions/download-artifact@v8 with run-id (cross-workflow)
 
     steps:
       - name: Checkout
@@ -61,7 +61,7 @@ jobs:
       # Using run-id from workflow_run ensures we deploy the exact image that
       # was scanned and attested — never re-derive from github.sha.
       - name: Download deploy-metadata artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: deploy-metadata
           run-id: ${{ github.event.workflow_run.id }}  # Upstream Container run
@@ -145,7 +145,7 @@ jobs:
     permissions:
       contents: read
       id-token: write  # Required for Azure OIDC
-      actions: read    # Required for actions/download-artifact@v4 with run-id (cross-workflow)
+      actions: read    # Required for actions/download-artifact@v8 with run-id (cross-workflow)
 
     steps:
       - name: Checkout
@@ -157,7 +157,7 @@ jobs:
       # Same artifact as staging — ensures prod deploys the exact same image
       # that was validated in staging.
       - name: Download deploy-metadata artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: deploy-metadata
           run-id: ${{ github.event.workflow_run.id }}  # Upstream Container run
