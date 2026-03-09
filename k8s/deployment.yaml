@@ -1,0 +1,85 @@
+# =============================================================================
+# Kubernetes Deployment Manifest — hello-java
+# =============================================================================
+# The image field uses the placeholder "REPLACE_ME".
+# deploy.yml patches it with sed before running kubectl apply:
+#
+#   sed -i "s|image: REPLACE_ME|image: <registry>:<sha-tag>|g" k8s/deployment.yaml
+#
+# Namespace is NOT set here — it is supplied at apply time:
+#   kubectl apply -f k8s/deployment.yaml -n <namespace>
+#
+# APP_NAME GitHub variable must equal the metadata.name value below ("hello-java").
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-java
+  labels:
+    app: hello-java
+    app.kubernetes.io/name: hello-java
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-java
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # zero-downtime: always keep full capacity during rollout
+  template:
+    metadata:
+      labels:
+        app: hello-java
+        app.kubernetes.io/name: hello-java
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: hello-java
+          image: REPLACE_ME   # patched by deploy.yml → sed before kubectl apply
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp   # JVM scratch space — required when readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 60

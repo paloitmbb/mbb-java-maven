@@ -41,11 +41,16 @@ jobs:
       - name: Submit dependency graph
         uses: advanced-security/maven-dependency-submission-action@v4
 
+      - name: Shorten commit SHA to 7 chars
+        id: short_sha
+        run: |
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@v0
         with:
           format: spdx-json
-          artifact-name: sbom-${{ github.sha }}
+          artifact-name: sbom-${{ steps.short_sha.outputs.sha }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 2: CodeQL SAST — push-triggered and weekly scheduled (no build dependency)
@@ -99,6 +104,8 @@ jobs:
       contents: read
       checks: write
       security-events: write
+      id-token: write      # Required for SLSA provenance attestation
+      attestations: write  # Required for actions/attest-build-provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -148,13 +155,6 @@ jobs:
           path: target/site/jacoco/
           retention-days: 7
 
-      - name: Normalize JAR filename
-        id: jar
-        run: |
-          JAR=$(ls target/*.jar | grep -v original | head -1)
-          cp "$JAR" target/app.jar
-          echo "path=target/app.jar" >> "$GITHUB_OUTPUT"
-
       - name: Resolve version metadata
         id: version
         run: |
@@ -169,12 +169,16 @@ jobs:
           printf '%s' "${SHA}"       > target/version-metadata/sha
           printf '%s' "${IMAGE_TAG}" > target/version-metadata/image-tag
 
-      - name: Create named JAR
+      - name: Create versioned JAR
+        id: named_jar
         run: |
           ARTIFACT_ID=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)
+          SOURCE_JAR=$(ls target/*.jar | grep -v original | head -1)
           NAMED_JAR="${ARTIFACT_ID}-${{ steps.version.outputs.version }}.${{ steps.version.outputs.sha }}.jar"
-          cp target/app.jar "target/${NAMED_JAR}"
-          echo "Named JAR created: target/${NAMED_JAR}"
+          cp "${SOURCE_JAR}" "target/${NAMED_JAR}"
+          printf '%s' "${NAMED_JAR}" > target/version-metadata/jar-filename
+          echo "filename=${NAMED_JAR}" >> "$GITHUB_OUTPUT"
+          echo "Versioned JAR: target/${NAMED_JAR}"
 
       # - name: Run OWASP Dependency-Check
       #   run: mvn --batch-mode org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=7 -Dformats=HTML,JSON,SARIF
@@ -195,12 +199,17 @@ jobs:
       #     path: target/dependency-check-report.*
       #     retention-days: 30
 
+      - name: Attest build provenance (JAR)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/${{ steps.named_jar.outputs.filename }}
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-jar
           path: |
-            target/app.jar
+            target/${{ steps.named_jar.outputs.filename }}
             target/version-metadata/
           retention-days: 3
           if-no-files-found: error
