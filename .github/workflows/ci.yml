@@ -51,6 +51,7 @@ jobs:
         with:
           format: spdx-json
           output-file: sbom-${{ steps.short_sha.outputs.sha }}.json
+          upload-artifact: false
 
       - name: Upload test reports
         if: always()
