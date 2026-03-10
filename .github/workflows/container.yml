@@ -120,13 +120,13 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_VERSION: v0.68.1
+          TRIVY_VERSION: v0.69.3
         run: |
           echo "::group::Install Trivy ${TRIVY_VERSION}"
           VER="${TRIVY_VERSION#v}"
           INSTALL_DIR="/home/runner/.local/bin/trivy-bin"
           mkdir -p "${INSTALL_DIR}"
-          # Asset filename uses a hyphen: trivy_0.57.1_Linux-64bit.tar.gz
+          # Asset filename uses a hyphen: trivy_0.69.3_Linux-64bit.tar.gz
           ASSET="trivy_${VER}_Linux-64bit.tar.gz"
           TRIVY_URL="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${ASSET}"
           echo "Downloading ${ASSET} from GitHub Releases..."

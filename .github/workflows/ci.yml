@@ -134,6 +134,29 @@ jobs:
       - name: Enforce coverage gate (>=80% line coverage)
         run: mvn --batch-mode --no-transfer-progress jacoco:check@check
 
+      - name: Log coverage summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f target/site/jacoco/index.html ]; then
+            # Extract line coverage percentage from the 'Total' row in the tfoot/tbody
+            PERCENTAGE=$(sed -n 's/.*Total<\/td><td class="bar">.*<\/td><td class="ctr2">\([0-9]*\)%<\/td>.*/\1/p' target/site/jacoco/index.html | head -n 1)
+
+            # Extract instructions, branches, lines, methods figures for a richer summary
+            # Footer structure: Total | bar | inst_cov | bar | branch_cov | missed_cxty | cxty | missed_lines | lines | missed_methods | methods | missed_classes | classes
+            LINE_COV=$(sed -n 's/.*Total<\/td>.*ctr2">\([0-9]*%\)<\/td><td class="bar">.*ctr2">\([0-9]*%\)<\/td>.*/\1/p' target/site/jacoco/index.html)
+            BRANCH_COV=$(sed -n 's/.*Total<\/td>.*ctr2">[0-9]*%<\/td><td class="bar">.*ctr2">\([0-9]*%\)<\/td>.*/\1/p' target/site/jacoco/index.html)
+
+            echo "## :bar_chart: JaCoCo Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Instruction Coverage** | \`${PERCENTAGE}%\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Branch Coverage** | \`${BRANCH_COV}\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice ::Total Instruction Coverage: ${PERCENTAGE}%"
+          else
+            echo "::warning ::JaCoCo report index.html not found. Skipping summary."
+          fi
+
       - name: Publish test results
         if: always()
         uses: EnricoMi/publish-unit-test-result-action@v2
