@@ -50,6 +50,7 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           format: spdx-json
+          output-file: sbom-${{ steps.short_sha.outputs.sha }}.spdx.json
           artifact-name: sbom-${{ steps.short_sha.outputs.sha }}.spdx
 
   # ─────────────────────────────────────────────────────────────────────────────
