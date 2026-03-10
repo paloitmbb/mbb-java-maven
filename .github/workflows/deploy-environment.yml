@@ -143,11 +143,13 @@ jobs:
             --resource-group ${{ inputs.aks_resource_group }} \
             --overwrite-existing
 
-      - name: Install kubelogin
+      - name: Install and convert kubelogin to AAD non-interactive
+        # Use azure/aks-set-context to handle login properly if possible,
+        # but for direct az cli approach, we must convert the kubeconfig
+        # to a service-principal/workload-identity friendly format.
         run: |
           sudo az aks install-cli
-          # Ensure it's in the PATH for the runner
-          echo "/usr/local/bin" >> $GITHUB_PATH
+          kubelogin convert-kubeconfig -l azurecli
 
       - name: Update manifest image tag
         run: |
