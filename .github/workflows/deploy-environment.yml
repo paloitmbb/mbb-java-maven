@@ -123,10 +123,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: ACR login
-        uses: azure/docker-login@v2
-        with:
-          login-server: ${{ vars.CONTAINER_REGISTRY }}
+      # TODO: set CONTAINER_REGISTRY variable (e.g. myregistry.azurecr.io) — ACR login server; used for Container Registry login
+      - name: ACR Login
+        run: |
+          echo "Logging in to Azure Container Registry..."
+          az acr login --name ${{ vars.CONTAINER_REGISTRY }} || {
+            echo "ERROR: ACR login failed!" >&2
+            exit 1
+          }
+          echo "ACR login successful!"
 
       - name: Pull image from registry
         run: |
