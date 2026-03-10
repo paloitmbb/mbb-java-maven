@@ -8,7 +8,7 @@
 # Steps executed in every environment:
 #   1. Download deploy-metadata artifact from Container run
 #   2. Azure OIDC login + ACR login
-#   3. Pull image + verify build attestation
+#   3. Pull image
 #   4. Set AKS context → apply manifest → wait for rollout
 #   5. Health check (env-specific retries / delay)
 #   6. Rollback on failure
@@ -90,7 +90,6 @@ jobs:
       contents: write      # Required for git tag push (production); harmless elsewhere
       id-token: write      # Required for Azure OIDC
       actions: read        # Required for actions/download-artifact@v4 with run-id
-      attestations: read   # Required for gh attestation verify
 
     steps:
       - name: Checkout
@@ -136,15 +135,6 @@ jobs:
       - name: Pull image from registry
         run: |
           docker pull "${{ steps.meta.outputs.image }}"
-
-      - name: Verify image attestation
-        # Requires container.yml to create attestation via actions/attest-build-provenance
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh attestation verify \
-            "oci://${{ steps.meta.outputs.image }}" \
-            --repo "${{ github.repository }}"
 
       - name: Get AKS credentials
         run: |

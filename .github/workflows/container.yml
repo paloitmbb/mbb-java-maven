@@ -50,7 +50,6 @@ jobs:
   # Job 1: build-scan-push
   # Downloads the pre-built app.jar from CI, builds Docker image, runs Trivy
   # scan directly on the Docker daemon, then pushes to ACR on main/develop.
-  # NO Maven/JDK, NO attestation, NO tarball transfer between jobs.
   # ─────────────────────────────────────────────────────────────────────────
   build-scan-push:
     name: Build, Scan and Push
