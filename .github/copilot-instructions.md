@@ -13,6 +13,8 @@ When generating code for this repository, always follow these principles in orde
 6. **CI/CD Stability**: Never rename workflow files or their `name:` fields — downstream `workflow_run` triggers depend on exact names
 7. **Documentation Sync**: When changing behavior, commands, or APIs, immediately update relevant documentation per `.github/instructions/update-docs-on-code-change.instructions.md`
 
+> **Codebase-detection rule**: Before generating any code, scan `pom.xml` for exact versions, scan `src/main/java` and `src/test/java` for naming and patterns, and consult `.github/instructions/` for domain rules. Only prescribe practices that exist in this repository.
+
 ---
 
 ## Technology Stack & Exact Versions
@@ -21,10 +23,12 @@ When generating code for this repository, always follow these principles in orde
 
 | Component | Version | Source | Constraints |
 |---|---|---|---|
-| Java (source/target) | **11** | `pom.xml` `maven.compiler.source/target` | No Java 12+ features (var OK, but no records, sealed, switch expressions, text blocks, pattern matching) |
+| Java (source/target) | **11** | `pom.xml` `maven.compiler.source/target` | No Java 12+ features (`var` OK; no records, sealed, switch expressions, text blocks, pattern matching) |
 | Maven Compiler Plugin | **3.8.1** | `pom.xml` | Standard compilation only |
 | Maven Surefire Plugin | **2.22.2** | `pom.xml` | JUnit 4 compatible, XML reports required |
 | Project Encoding | **UTF-8** | `pom.xml` `project.build.sourceEncoding` | Always use UTF-8 |
+
+> CI runners use **JDK 21** (temurin) for tooling — DevContainer likewise uses `mcr.microsoft.com/devcontainers/java:1-21-bookworm`. The compiler target is still Java 11. Never use Java 21 language features.
 
 ### Testing Framework
 
@@ -39,19 +43,19 @@ When generating code for this repository, always follow these principles in orde
 |---|---|
 | Group ID | `com.example` |
 | Artifact ID | `hello-java` |
-| Packaging | `jar` → renamed to `app.jar` in CI pipeline |
+| Packaging | `jar` → versioned as `{artifactId}-{version}.{sha}.jar` in CI, copied to `app.jar` for Docker |
 | Base Package | `com.example` (all Java code under this) |
 
 ### Development Environment
 
 | Component | Version | Source |
-|---|---|
+|---|---|---|
 | DevContainer Base Image | `mcr.microsoft.com/devcontainers/java:1-21-bookworm` | `.devcontainer/devcontainer.json` |
 | DevContainer User | `vscode` | `.devcontainer/devcontainer.json` |
 | IDE Formatter | Red Hat Java formatter | `.devcontainer/devcontainer.json` |
 | Format on Save | **Enabled** | `.devcontainer/devcontainer.json` |
 
-**Note**: DevContainer uses Java 21 runtime for development tooling, but compilation targets Java 11 — never use Java 21 language features.
+**Note**: DevContainer and CI runners use Java 21 runtime for tooling, but compilation targets Java 11 — never use Java 21 language features.
 
 ---
 
@@ -291,52 +295,105 @@ mvn dependency:resolve    # Download dependencies (DevContainer post-create)
 
 ---
 
-## CI/CD Pipeline (5-Workflow Chain)
+## CI/CD Pipeline (6-Workflow Chain)
+
+### Workflow Files & Immutable Names
+
+| File | `name:` field | Trigger | Constraints |
+|---|---|---|---|
+| `copilot-setup-steps.yml` | `Copilot Setup Steps` | `workflow_dispatch`, push/PR on self | GitHub Copilot agent pre-warm |
+| `pr-validation.yml` | `PR Validation` | `pull_request` → `main`, `develop` | `cancel-in-progress: true` |
+| `ci.yml` | `CI` | push → `main`, `workflow_dispatch`, weekly cron | **`cancel-in-progress: false`** — referenced by `container.yml` trigger |
+| `container.yml` | `Container` | `workflow_run` on `CI` | **`cancel-in-progress: true`** — referenced by `deploy.yml` trigger |
+| `deploy.yml` | `Deploy` | `workflow_run` on `Container` | **`cancel-in-progress: false`** — calls `deploy-environment.yml` |
+| `deploy-environment.yml` | `Deploy Environment (Reusable)` | `workflow_call` only | Reusable template; never rename |
 
 ### Pipeline Flow
 
 ```
 Pull Request
      ↓
-pr-validation.yml (cache, test, lint, SAST, secrets)
-     ↓ (merge to main/develop)
-ci.yml (build JAR, OWASP, SBOM)
-     ↓ (workflow_run)
-container.yml (Docker build, Trivy scan, push ACR)
-     ↓ (workflow_run)
-deploy.yml (staging → production with approval)
+pr-validation.yml — PR Validation
+  Jobs (parallel after cache warm):
+    setup-cache → build-and-test
+    setup-cache → code-quality (Checkstyle + SpotBugs)
+    setup-cache → codeql (skipped on forks)
+               → secrets-scan (TruffleHog — independent, no setup-cache dependency)
+               → dependency-review (independent)
+     ↓ (merge to main)
+ci.yml — CI
+  Jobs:
+    sbom (parallel)  ─┐
+    codeql (parallel) ─┤→ build-and-package (needs both)
+     ↓ (workflow_run on CI success)
+container.yml — Container
+  Jobs:
+    build-scan-push (download app-jar → docker build → Trivy scan → push ACR)
+     ↓ (workflow_run on Container success)
+deploy.yml — Deploy
+  Jobs (sequential):
+    deploy-sit  (auto, no approval) →
+    deploy-uat  (1 approval required) →
+    deploy-production  (2 approvals, main only, creates Git tag)
+      Each stage calls → deploy-environment.yml — Deploy Environment (Reusable)
 ```
 
 ### Critical Workflow Constraints
 
-**❌ NEVER change these** (breaks workflow_run triggers):
+**❌ NEVER change these** (breaks `workflow_run` triggers):
 
 | File | Field | Current Value | Why |
 |---|---|---|---|
-| `ci.yml` | `name:` | `"CI"` | Referenced by `container.yml` trigger |
-| `container.yml` | `name:` | `"Container"` | Referenced by `deploy.yml` trigger |
+| `ci.yml` | `name:` | `"CI"` | Referenced by `container.yml` `workflow_run` trigger |
+| `container.yml` | `name:` | `"Container"` | Referenced by `deploy.yml` `workflow_run` trigger |
 
 **Other critical rules**:
-- Image tags: `sha-xxxxxxx` format — **never `:latest`**
-- Deploy workflow: `cancel-in-progress: false` (CRITICAL — interrupting kubectl rollout corrupts pods)
-- Container workflow: `cancel-in-progress: true` (safe — only image build)
-- PR Validation workflow: `cancel-in-progress: true` (efficient — supercede on new push)
-- CI workflow: `cancel-in-progress: false` (protected branches, artifact must complete)
-- Rollback: `if: failure()` uses `kubectl rollout undo` (NOT `if: always()`)
+- Image tag format: `v{pom.version}.{7-char-sha}` (e.g., `v1.0.0.abc1234`) — derived in `ci.yml`, propagated via `version-metadata/image-tag` artifact
+- Container also pushes `:latest` tag alongside the versioned tag (both pushed to ACR on main)
+- `deploy.yml`: `cancel-in-progress: false` (CRITICAL — interrupting kubectl rollout corrupts pods)
+- `container.yml`: `cancel-in-progress: true` (safe — only image build)
+- `pr-validation.yml`: `cancel-in-progress: true` (efficient — supersede on new push)
+- `ci.yml`: `cancel-in-progress: false` (protected branches, artifact must complete)
+- Rollback: `if: failure()` uses `kubectl rollout undo`
 - Production: **main branch only** (`head_branch == 'main'` gate)
+- SIT / UAT: deploys on all watched branches
 - Artifact download: always use `run-id: ${{ github.event.workflow_run.id }}` — never default
-- Commit SHA: use `workflow_run.head_sha` — never `github.sha` (wrong in workflow_run context)
+- Commit SHA: use `workflow_run.head_sha` — never `github.sha` (wrong in `workflow_run` context)
+
+### Artifacts Produced
+
+| Artifact Name | Produced By | Consumed By | Contents |
+|---|---|---|---|
+| `app-jar` | `ci.yml` `build-and-package` | `container.yml` `build-scan-push` | Versioned JAR + `version-metadata/` directory |
+| `deploy-metadata` | `container.yml` `build-scan-push` | `deploy-environment.yml` | `image-tag` file |
+| `pr-test-reports` | `pr-validation.yml` `build-and-test` | Reviewers | Surefire XML |
+| `pr-coverage-report` | `pr-validation.yml` `build-and-test` | Reviewers | JaCoCo HTML |
+| `quality-reports` | `pr-validation.yml` `code-quality` | Reviewers | Checkstyle + SpotBugs XML |
+| `test-reports` | `ci.yml` `build-and-package` | Reviewers | Surefire XML |
+| `coverage-report` | `ci.yml` `build-and-package` | Reviewers | JaCoCo HTML |
 
 ### Secrets & Variables
 
-**GitHub Secrets**:
-- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OIDC)
-- `GITLEAKS_LICENSE` (private repos)
+**GitHub Secrets** (configure in repository/org settings):
 
-**GitHub Variables**:
-- `ACR_LOGIN_SERVER`, `ACR_REPOSITORY` (container push)
-- `AKS_CLUSTER_NAME_STAGING/PROD`, `AKS_RESOURCE_GROUP_STAGING/PROD`
-- `APP_NAME`, `STAGING_HEALTH_URL`, `PRODUCTION_HEALTH_URL`
+| Secret | Used By | Purpose |
+|---|---|---|
+| `AZURE_CLIENT_ID` | `container.yml`, `deploy-environment.yml` | Azure OIDC federated credential |
+| `AZURE_TENANT_ID` | `container.yml`, `deploy-environment.yml` | Azure OIDC |
+| `AZURE_SUBSCRIPTION_ID` | `container.yml`, `deploy-environment.yml` | Azure OIDC |
+
+**GitHub Variables** (configure in repository/org settings):
+
+| Variable | Used By | Example Value |
+|---|---|---|
+| `CONTAINER_REGISTRY` | `container.yml`, `deploy-environment.yml` | `myregistry.azurecr.io` |
+| `APP_NAME` | `container.yml`, `deploy-environment.yml` | `hello-java` |
+| `AKS_CLUSTER_NAME_SIT` | `deploy.yml` | `aks-sit` |
+| `AKS_RESOURCE_GROUP_SIT` | `deploy.yml` | `rg-sit` |
+| `AKS_CLUSTER_NAME_UAT` | `deploy.yml` | `aks-uat` |
+| `AKS_RESOURCE_GROUP_UAT` | `deploy.yml` | `rg-uat` |
+| `AKS_CLUSTER_NAME_PROD` | `deploy.yml` | `aks-prod` |
+| `AKS_RESOURCE_GROUP_PROD` | `deploy.yml` | `rg-prod` |
 
 ---
 
@@ -361,7 +418,7 @@ Use these agents for specific implementation tasks. Always invoke the right agen
 | `@maven-docker-bridge` | `maven-docker-bridge.agent.md` | Validates build-once principle (no Maven/JDK in container workflow) |
 | `@pr-validation-workflow-builder` | `pr-validation-workflow-builder.agent.md` | Implement/update `pr-validation.yml` (Plan 1) |
 | `@reviewer` | `reviewer.agent.md` | Code and documentation review |
-| `@se-security-reviewer` | `se-security-reviewer.agent.md` | Security gate validation, OWASP, Trivy, Gitleaks |
+| `@se-security-reviewer` | `se-security-reviewer.agent.md` | Security gate validation, OWASP, Trivy, TruffleHog |
 | `@workflow-chain-validator` | `workflow-chain-validator.agent.md` | **Critical**: validates `workflow_run` trigger chain integrity |
 
 ### Implementation Plans (`.github/plans/`)
@@ -406,16 +463,16 @@ Consult `.github/agents/IMPLEMENTATION-MATRIX.md` for the full agent-to-plan-to-
 
 ## Quality Gates (Must Not Regress)
 
-| Gate | Threshold | Enforced In | Failure Action |
-|---|---|---|---|
-| JaCoCo line coverage | **≥ 80%** | PR validation, CI | Build fails |
-| OWASP Dependency-Check | **CVSS < 7** | CI | Build fails, uploads SARIF |
-| Trivy Container Scan | **No CRITICAL/HIGH** | Container | Build fails, uploads SARIF |
-| CodeQL SAST | *Advisory only* | PR, CI | Uploads to Security tab |
-| Gitleaks Secrets | **No secrets** | PR validation | Build fails |
-| Checkstyle | **Zero violations** | PR validation | Build fails |
-| SpotBugs | **Zero violations** | PR validation | Build fails |
-| License Check | **No GPL-2.0/AGPL-3.0** | PR validation | Build fails, comments on PR |
+| Gate | Threshold | Enforced In | Tool | Notes |
+|---|---|---|---|---|
+| JaCoCo line coverage | **≥ 80%** | PR Validation, CI | `jacoco:check@check` | Hard build gate |
+| Trivy Container Scan | **No CRITICAL/HIGH** | Container | `aquasecurity/trivy-action@0.29.0` | Uploads SARIF to Security tab |
+| CodeQL SAST | *Advisory only* | PR Validation (non-fork), CI | `github/codeql-action` | Uploads to Security tab |
+| TruffleHog Secrets Scan | **No verified secrets** | PR Validation | TruffleHog OSS binary (v3.93.7) | Binary used directly — avoids AGPL-3.0 action license flag |
+| Dependency Review | **No HIGH+ vulns; deny GPL-2.0, AGPL-3.0** | PR Validation | `actions/dependency-review-action@v4` | Comments on PR on failure; requires GHAS |
+| Checkstyle | **Zero violations** | PR Validation | `checkstyle:check` | Fails build |
+| SpotBugs | **Zero violations** | PR Validation | `spotbugs:check` | Fails build |
+| OWASP Dependency-Check | *(disabled — commented out in ci.yml)* | — | — | Re-enable when GHAS is available |
 
 ---
 
@@ -423,7 +480,7 @@ Consult `.github/agents/IMPLEMENTATION-MATRIX.md` for the full agent-to-plan-to-
 
 ### Docker Image Pattern (from cicd-pipeline-guide.md)
 
-**Build strategy**: Single-stage runtime image — JAR is pre-built by Maven.
+**Build strategy**: Single-stage runtime image — JAR is pre-built by Maven in `ci.yml` and downloaded by `container.yml`. No Maven or JDK in the Docker build.
 
 ```dockerfile
 FROM eclipse-temurin:21-jre-alpine
@@ -436,7 +493,7 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
-Consult `.github/instructions/containerization-docker-best-practices.instructions.md` for advanced patterns.
+**Image tags pushed to ACR** (on main branch): versioned tag `v{pom.version}.{7-char-sha}` **and** `:latest` — always together.
 
 ### Kubernetes Deployment Pattern
 
@@ -542,7 +599,7 @@ Follow [Nygard template](https://github.com/joelparkerhenderson/architecture-dec
 8. **Null before isEmpty()** — always check null first
 9. **Javadoc required** — all public methods
 10. **Never rename** — `name: CI` or `name: Container` (immutable workflow_run triggers)
-11. **Immutable tags** — `sha-xxxxxxx`, never `:latest`
+11. **Versioned + latest tags** — CI produces `v{version}.{sha}` tag; container workflow ALSO pushes `:latest` alongside it
 12. **Update docs** — immediately when code changes behavior
 13. **Conventional commits** — `<type>(scope): description`
 14. **Context files first** — `.github/instructions/` override general practices
@@ -552,6 +609,10 @@ Follow [Nygard template](https://github.com/joelparkerhenderson/architecture-dec
 18. **Build-once** — JAR built once in `ci.yml`; container workflow downloads artifact, never re-compiles
 19. **workflow_run context** — use `workflow_run.head_sha` and `workflow_run.head_branch` (not `github.sha`/`github.ref`)
 20. **Plans define intent** — consult `.github/plans/` before implementing any pipeline component
+21. **Deploy stages** — SIT (auto) → UAT (1 approval) → Production (2 approvals, main only, creates Git tag)
+22. **Reusable deploy template** — each stage calls `deploy-environment.yml`; never duplicate deploy logic
+23. **Secrets scan** — TruffleHog OSS binary (not action) is used to avoid AGPL-3.0 license flag in dependency review
+24. **Variables** — use `CONTAINER_REGISTRY` and `APP_NAME` (not `ACR_LOGIN_SERVER` / `ACR_REPOSITORY`)
 
 ---
 

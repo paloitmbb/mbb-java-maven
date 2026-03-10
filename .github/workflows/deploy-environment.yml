@@ -106,13 +106,14 @@ jobs:
           run-id: ${{ inputs.container_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # TODO: set CONTAINER_REGISTRY_NAME variable (e.g. myregistry.azurecr.io) — used for image reference and ACR login
+      # TODO: set CONTAINER_REGISTRY variable (e.g. myregistry.azurecr.io) — ACR login server; used for docker-login and image reference
+      # TODO: set APP_NAME variable (e.g. hello-java) — image repository within the registry; change per repo when reusing this workflow
       - name: Read deploy metadata
         id: meta
         run: |
           IMAGE_TAG=$(cat image-tag)
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "image=${{ vars.CONTAINER_REGISTRY_NAME }}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
 
       # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (Azure service principal with OIDC federated credentials)
       - name: Azure login (OIDC)
@@ -125,11 +126,11 @@ jobs:
       - name: ACR login
         uses: azure/docker-login@v2
         with:
-          login-server: ${{ vars.CONTAINER_REGISTRY_NAME }}
+          login-server: ${{ vars.CONTAINER_REGISTRY }}
 
       - name: Pull image from registry
         run: |
-          docker pull "${{ vars.CONTAINER_REGISTRY_NAME }}:${{ steps.meta.outputs.image_tag }}"
+          docker pull "${{ steps.meta.outputs.image }}"
 
       - name: Verify image attestation
         # Requires container.yml to create attestation via actions/attest-build-provenance
@@ -137,14 +138,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh attestation verify \
-            "oci://${{ vars.CONTAINER_REGISTRY_NAME }}:${{ steps.meta.outputs.image_tag }}" \
+            "oci://${{ steps.meta.outputs.image }}" \
             --repo "${{ github.repository }}"
 
-      - name: Set AKS context
-        uses: azure/aks-set-context@v4
-        with:
-          cluster-name: ${{ inputs.aks_cluster_name }}
-          resource-group: ${{ inputs.aks_resource_group }}
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --name ${{ inputs.aks_cluster_name }} \
+            --resource-group ${{ inputs.aks_resource_group }} \
+            --overwrite-existing
 
       - name: Update manifest image tag
         run: |

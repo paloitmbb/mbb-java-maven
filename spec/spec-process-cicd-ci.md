@@ -2,101 +2,138 @@
 title: CI/CD Workflow Specification - CI
 version: 1.0
 date_created: 2026-03-05
-last_updated: 2026-03-05
+last_updated: 2026-03-10
 owner: DevOps Team
 tags: [process, cicd, github-actions, automation, build, test, security, sbom, sast, java, maven]
 ---
 
-## Workflow Overview
+# Introduction
 
-**Purpose**: Build, test, package, and security-scan the application on every push to `main`/`develop`; produce the `app-jar` artifact consumed by the Container workflow.
-**Trigger Events**: Push to `main` or `develop`; `workflow_dispatch`; weekly schedule (Sunday 21:00 UTC)
-**Target Environments**: CI runner (no deployment)
-**Workflow File**: `.github/workflows/ci.yml`
-**Workflow Name (immutable)**: `CI` ← **Never rename — `container.yml` triggers on this exact name**
-**Chain Position**: Link 1 of 3 — upstream of `Container` workflow
+This specification defines the Continuous Integration (CI) process for the Java Maven application. It ensures that every code change pushed to the main development branches is automatically built, tested, and scanned for security vulnerabilities before producing a deployable artifact.
 
----
+## 1. Purpose & Scope
 
-## Execution Flow Diagram
+The purpose of this specification is to provide a clear and unambiguous definition of the CI workflow. It covers the build lifecycle, testing requirements, security scanning gates, and artifact production. This document is intended for DevOps engineers, developers, and security auditors.
 
-```mermaid
-graph TD
-    A([Push to main/develop OR schedule OR workflow_dispatch]) --> B[build-and-package]
+## 2. Definitions
 
-    B --> C[security-gate]
-    B --> D[sbom]
-    B --> E[codeql]
+- **CI**: Continuous Integration.
+- **SBOM**: Software Bill of Materials.
+- **SAST**: Static Application Security Testing (CodeQL).
+- **OWASP**: Open Web Application Security Project.
+- **CVSS**: Common Vulnerability Scoring System.
+- **Artifact**: A deployable version of the application (e.g., a JAR file).
+- **SARIF**: Static Analysis Results Interchange Format.
 
-    C --> F([CI Complete — app-jar artifact available])
-    D --> F
-    E --> F
+## 3. Requirements, Constraints & Guidelines
 
-    style A fill:#e1f5fe
-    style F fill:#e8f5e8
-    style B fill:#f3e5f5
-    style C fill:#ffebee
-    style D fill:#fff3e0
-    style E fill:#fff3e0
+- **REQ-001**: Single Maven lifecycle: `clean verify -P integration-test` builds, tests, and packages.
+- **REQ-002**: Integration tests run as soft gate (non-blocking).
+- **REQ-003**: Line coverage ≥ 80% enforced as hard gate via JaCoCo.
+- **REQ-004**: Test results published to GitHub Checks.
+- **REQ-005**: JAR normalized to `app.jar` before artifact upload.
+- **REQ-006**: OWASP Dependency-Check fails on CVSS ≥ 7.
+- **REQ-007**: OWASP SARIF uploaded to GitHub Security tab.
+- **REQ-008**: SPDX SBOM generated and archived per commit SHA.
+- **REQ-009**: Dependency graph submitted to GitHub.
+- **REQ-010**: CodeQL uses full git history (`fetch-depth: 0`).
+- **REQ-011**: Weekly scheduled run for CodeQL drift detection.
+- **SEC-001**: No credentials persist after checkout (`persist-credentials: false`).
+- **SEC-002**: CVSS ≥ 7 dependency CVEs block build.
+- **CON-001**: Workflow Name must remain `CI` for downstream `workflow_run` triggers.
+- **CON-002**: Concurrency: `ci-${{ github.ref }}` — one active run per branch.
+- **GUD-001**: Separate body/footers from subject in commit messages.
+
+## 4. Interfaces & Data Contracts
+
+### Workflow Trigger
+```yaml
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 21 * * 0'
 ```
 
----
+### Artifact Contract
+The workflow produces an artifact named `app-jar` containing:
+- `app.jar`: The executable Spring Boot application.
+- `version-metadata/`: Directory containing version information.
 
-## Jobs & Dependencies
+## 5. Acceptance Criteria
 
-| Job Name | Purpose | Dependencies | Execution Context | Timeout |
-|---|---|---|---|---|
-| `build-and-package` | Full Maven lifecycle: compile → test → coverage → package; uploads `app-jar` | — | `ubuntu-latest` | 25 min |
-| `security-gate` | OWASP Dependency-Check; blocks on CVSS ≥ 7; uploads SARIF | `build-and-package` | `ubuntu-latest` | 20 min |
-| `sbom` | Submit dependency graph to GitHub; generate SPDX SBOM artifact | `build-and-package` | `ubuntu-latest` | 10 min |
-| `codeql` | Full CodeQL SAST (security-and-quality queries) on full history | `build-and-package` | `ubuntu-latest` | 30 min |
+- **AC-001**: Given a push to `main`, When the CI workflow runs, Then it must produce a valid `app-jar` artifact if all gates pass.
+- **AC-002**: Given a code change with < 80% coverage, When the CI workflow runs, Then the build must fail.
+- **AC-003**: Given a dependency with CVSS 8.0, When the security scan runs, Then the `security-gate` job must fail.
 
-**Concurrency**: `ci-${{ github.ref }}` — one active run per branch; `cancel-in-progress: false` (never cancel running CI).
+## 6. Test Automation Strategy
 
----
+- **Test Levels**: Unit, Integration (soft gate).
+- **Frameworks**: JUnit 4 (specified in `pom.xml`).
+- **CI/CD Integration**: Automated via GitHub Actions `ci.yml`.
+- **Coverage Requirements**: Line coverage ≥ 80% (JaCoCo).
 
-## Requirements Matrix
+## 7. Rationale & Context
 
-### Functional Requirements
+The build-once principle is central to this architecture. The CI workflow builds the JAR once, which is then used by the Container workflow to build the image, ensuring that the exact same code that was tested is what gets deployed.
 
-| ID | Requirement | Priority | Acceptance Criteria |
-|---|---|---|---|
-| REQ-001 | Single Maven lifecycle: `clean verify -P integration-test` builds, tests, and packages | High | One Maven invocation handles all lifecycle phases |
-| REQ-002 | Integration tests run as soft gate (non-blocking) | Medium | `continue-on-error: true` on integration test step |
-| REQ-003 | Line coverage ≥ 80% enforced as hard gate | High | `jacoco:check` exits non-zero below threshold |
-| REQ-004 | Test results published to GitHub Checks | Medium | XML reports attached to commit status |
-| REQ-005 | JAR normalized to `app.jar` before artifact upload | High | Container workflow expects `app-jar` artifact containing `app.jar` |
-| REQ-006 | OWASP Dependency-Check fails on CVSS ≥ 7 | High | `-DfailBuildOnCVSS=7` causes exit non-zero |
-| REQ-007 | OWASP SARIF uploaded to GitHub Security tab | Medium | `upload-sarif` runs even on failure (`if: always()`) |
-| REQ-008 | SPDX SBOM generated and archived per commit SHA | Medium | Artifact named `sbom-${{ github.sha }}` |
-| REQ-009 | Dependency graph submitted to GitHub | Medium | `maven-dependency-submission-action` runs post-build |
-| REQ-010 | CodeQL uses full git history | Medium | `fetch-depth: 0` on codeql job checkout |
-| REQ-011 | Weekly scheduled run for CodeQL drift detection | Low | `cron: '0 21 * * 0'` |
+## 8. Dependencies & External Integrations
 
-### Security Requirements
+### External Systems
+- **EXT-001**: GitHub Actions - Execution platform.
+- **EXT-002**: GitHub Security Tab - SARIF result consumption.
 
-| ID | Requirement | Implementation Constraint |
-|---|---|---|
-| SEC-001 | No credentials persist after checkout | `persist-credentials: false` on all checkouts |
-| SEC-002 | CVSS ≥ 7 dependency CVEs block build | `security-gate` job set to fail build |
-| SEC-003 | OWASP and CodeQL SARIF visible in Security tab | `security-events: write` scoped to respective jobs |
-| SEC-004 | SBOM archived for supply chain audit | `sbom` job generates SPDX JSON artifact per commit |
-| SEC-005 | `contents: write` scoped only to `sbom` job | Required for dependency graph submission |
+### Infrastructure Dependencies
+- **INF-001**: Ubuntu Latest - GitHub-hosted runner.
 
-### Performance Requirements
+### Technology Platform Dependencies
+- **PLT-001**: Java 11 (Source/Target) - Application runtime.
+- **PLT-002**: Maven 3.8.x - Build system.
 
-| ID | Metric | Target | Measurement Method |
-|---|---|---|---|
-| PERF-001 | `build-and-package` duration | ≤ 25 min | Job timeout |
-| PERF-002 | `security-gate` duration | ≤ 20 min | Job timeout |
-| PERF-003 | Total pipeline wall-clock | ≤ 45 min | GitHub Actions run duration |
-| PERF-004 | Maven cache hit rate | > 80% | `cache: maven` restore logs |
+## 9. Examples & Edge Cases
 
----
+### POM Configuration for JaCoCo
+```xml
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <version>${jacoco.version}</version>
+    <executions>
+        <execution>
+            <id>check</id>
+            <goals><goal>check</goal></goals>
+            <configuration>
+                <rules>
+                    <rule>
+                        <element>BUNDLE</element>
+                        <limits>
+                            <limit>
+                                <counter>LINE</counter>
+                                <value>COVEREDRATIO</value>
+                                <minimum>0.80</minimum>
+                            </limit>
+                        </limits>
+                    </rule>
+                </rules>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
 
-## Input/Output Contracts
+## 10. Validation Criteria
 
-### Inputs
+- **VAL-001**: Successful run on `main` branch producing `app-jar`.
+- **VAL-002**: Failure of `security-gate` job when vulnerable dependencies are added.
+- **VAL-003**: Presence of SBOM in workflow artifacts.
+
+## 11. Related Specifications / Further Reading
+
+- [spec-process-cicd-container.md](spec-process-cicd-container.md)
+- [spec-process-cicd-deploy.md](spec-process-cicd-deploy.md)
+- [.github/instructions/java.instructions.md](../.github/instructions/java.instructions.md)
+
 
 ```yaml
 # GitHub Events

@@ -2,102 +2,117 @@
 title: CI/CD Workflow Specification - Deploy
 version: 1.0
 date_created: 2026-03-05
-last_updated: 2026-03-05
+last_updated: 2026-03-10
 owner: DevOps Team
 tags: [process, cicd, github-actions, automation, kubernetes, aks, azure, deployment, staging, production, rollback]
 ---
 
-## Workflow Overview
+# Introduction
 
-**Purpose**: Deploy the validated and attested container image to AKS staging (all branches) and AKS production (main only, with required human approval).
-**Trigger Events**: Successful completion of Container workflow (`workflow_run`); `workflow_dispatch`
-**Target Environments**: AKS Staging, AKS Production
-**Workflow File**: `.github/workflows/deploy.yml`
-**Workflow Name**: `Deploy`
-**Chain Position**: Link 3 of 3 — final stage; downstream of `Container`
+This specification defines the deployment process for the Java Maven application to Azure Kubernetes Service (AKS) across staging and production environments.
 
----
+## 1. Purpose & Scope
 
-## Execution Flow Diagram
+The purpose of this specification is to provide a clear and unambiguous definition of the Deployment workflow. It covers the staging deployment, human approval gates for production, health checks, and automatic rollback strategies.
 
-```mermaid
-graph TD
-    A([Container workflow completed successfully]) --> B[deploy-staging]
+## 2. Definitions
 
-    B -->|Success + branch == main| C{Production
-Approval Gate}
-    B -->|Failure| D[Rollback Staging]
+- **AKS**: Azure Kubernetes Service.
+- **SIT / Staging**: System Integration Testing environment.
+- **UAT**: User Acceptance Testing environment.
+- **PROD / Production**: Final production environment.
+- **Rollback**: Reverting to the previous stable deployment.
+- **Approval Gate**: A mandatory human intervention points for merging or deploying.
 
-    C -->|Approved ≥2 reviewers| E[deploy-production]
-    C -->|Timeout / Rejected| F([Deployment Halted])
+## 3. Requirements, Constraints & Guidelines
 
-    E -->|Success| G([Production Deployment Complete])
-    E -->|Failure| H[Rollback Production]
+- **REQ-001**: Deploy only when upstream Container workflow succeeded.
+- **REQ-002**: Image tag read from `deploy-metadata` artifact — never re-derived.
+- **REQ-003**: Staging receives deployments from both `main` and `develop`.
+- **REQ-004**: Production deploys restricted to `main` branch only.
+- **REQ-005**: Production requires ≥2 required reviewers approval.
+- **REQ-006**: Staging rollout waits with 5-minute timeout.
+- **REQ-007**: Production rollout waits with 10-minute timeout.
+- **REQ-008**: Staging health check: 5 retries, 10s delay via `curl`.
+- **REQ-009**: Production health check: 10 retries, 15s delay via `curl`.
+- **REQ-010**: Auto-rollback triggered only on failure (`if: failure()`).
+- **REQ-011**: Deployments never cancelled mid-flight (`cancel-in-progress: false`).
+- **REQ-012**: Same image deployed to staging and production.
+- **SEC-001**: Azure login via OIDC — no stored credentials.
+- **SEC-002**: Production environment requires ≥2 approvals.
+- **SEC-003**: Production access restricted to `main` branch.
+- **CON-001**: Workflow Name must remain `Deploy` for clarity.
+- **CON-002**: Concurrency: `deploy-${{ github.event.workflow_run.head_branch }}`.
 
-    style A fill:#e1f5fe
-    style G fill:#e8f5e8
-    style F fill:#ffebee
-    style D fill:#ffebee
-    style H fill:#ffebee
-    style C fill:#fff3e0
+## 4. Interfaces & Data Contracts
+
+### Workflow Trigger
+```yaml
+on:
+  workflow_run:
+    workflows: ["Container"]
+    types: [completed]
+  workflow_dispatch:
 ```
 
----
+### Artifact Contract
+Reads from the upstream `deploy-metadata` artifact:
+- `image-tag`: The tag used for the deployment.
+- `image-digest`: The SHA256 digest for verification.
 
-## Jobs & Dependencies
+## 5. Acceptance Criteria
 
-| Job Name | Purpose | Dependencies | Execution Context | Timeout | Environment |
-|---|---|---|---|---|---|
-| `deploy-staging` | Deploy image to AKS staging; health-check; auto-rollback on failure | — (CI conclusion required) | `ubuntu-latest` | 15 min | `staging` |
-| `deploy-production` | Deploy same image to AKS production; health-check; auto-rollback on failure | `deploy-staging` | `ubuntu-latest` | 20 min | `production` |
+- **AC-001**: Given a successful container build, When the staging deployment runs, Then the application must be accessible at the SIT endpoint.
+- **AC-002**: Given a failed health check, When the deployment finishes, Then `kubectl rollout undo` must be executed.
+- **AC-003**: Given a push to `main`, When production deployment is triggered, Then it must wait for two manual approvals.
 
-**Concurrency**: `deploy-${{ github.event.workflow_run.head_branch }}` — `cancel-in-progress: false` (CRITICAL: never cancel in-flight deployments).
+## 6. Test Automation Strategy
 
----
+- **Health Checks**: Actuator health endpoint monitoring.
+- **Verification**: `kubectl rollout status` validation.
+- **CI/CD Integration**: Automated via GitHub Actions `deploy.yml`.
 
-## Requirements Matrix
+## 7. Rationale & Context
 
-### Functional Requirements
+The deployment strategy uses a shared reusable workflow to ensure consistency across environments. Production deployments are protected by environmental gates and restricted to the main branch to maintain code quality.
 
-| ID | Requirement | Priority | Acceptance Criteria |
-|---|---|---|---|
-| REQ-001 | Deploy only when upstream Container workflow succeeded | High | Top-level `if: workflow_run.conclusion == 'success'` |
-| REQ-002 | Image tag read from `deploy-metadata` artifact — never re-derived | High | `image-tag` file from Container run's `deploy-metadata` artifact |
-| REQ-003 | Staging receives deployments from both `main` and `develop` | High | No branch restriction on `deploy-staging` |
-| REQ-004 | Production deploys restricted to `main` branch only | High | `if: workflow_run.head_branch == 'main'` on `deploy-production` |
-| REQ-005 | Production requires ≥2 required reviewers approval | High | GitHub Environment protection rules on `production` environment |
-| REQ-006 | Staging rollout waits with 5-minute timeout | High | `kubectl rollout status --timeout=5m` |
-| REQ-007 | Production rollout waits with 10-minute timeout | High | `kubectl rollout status --timeout=10m` |
-| REQ-008 | Staging health check: 5 retries, 10s delay | High | `curl --retry 5 --retry-delay 10` on `STAGING_HEALTH_URL/actuator/health` |
-| REQ-009 | Production health check: 10 retries, 15s delay | High | `curl --retry 10 --retry-delay 15` on `PRODUCTION_HEALTH_URL/actuator/health` |
-| REQ-010 | Auto-rollback triggered only on failure | High | `if: failure()` guard on rollback steps |
-| REQ-011 | Deployments never cancelled mid-flight | Critical | `cancel-in-progress: false` on concurrency block |
-| REQ-012 | Same image deployed to staging and production | High | Both jobs read from same `deploy-metadata` artifact |
+## 8. Dependencies & External Integrations
 
-### Security Requirements
+### External Systems
+- **EXT-001**: Azure Kubernetes Service (AKS) - Runtime environment.
+- **EXT-002**: GitHub Environments - Approval management and secret storage.
 
-| ID | Requirement | Implementation Constraint |
-|---|---|---|
-| SEC-001 | Azure login via OIDC — no stored credentials | `azure/login@v2` with federated identity secrets |
-| SEC-002 | Production environment requires ≥2 approvals | GitHub Environment protection rules (Settings → Environments → production) |
-| SEC-003 | Production access restricted to `main` branch | `if: workflow_run.head_branch == 'main'` |
-| SEC-004 | Image digest available for audit | `image-digest` file in `deploy-metadata` artifact |
-| SEC-005 | `actions: read` required for cross-workflow artifact download | Scoped to each deployment job |
+### Infrastructure Dependencies
+- **INF-001**: Ubuntu Latest - GitHub-hosted runner.
 
-### Performance Requirements
+### Technology Platform Dependencies
+- **PLT-001**: Kubectl - Kubernetes management.
+- **PLT-002**: Azure CLI - ACR/AKS authentication.
 
-| ID | Metric | Target | Measurement Method |
-|---|---|---|---|
-| PERF-001 | Staging deployment end-to-end | ≤ 15 min | Job timeout |
-| PERF-002 | Production deployment end-to-end | ≤ 20 min | Job timeout |
-| PERF-003 | Total pipeline (from push to prod) | ≤ 90 min (incl. approval wait) | GitHub Actions run duration |
-| PERF-004 | Health check response time | < 30s per retry | `curl --retry-connrefused` |
+## 9. Examples & Edge Cases
 
----
+### Health Check with Retries
+```bash
+curl --fail \
+     --retry 10 \
+     --retry-delay 15 \
+     --retry-connrefused \
+     --max-time 30 \
+     ${{ inputs.health_url }}/actuator/health
+```
 
-## Input/Output Contracts
+## 10. Validation Criteria
 
-### Inputs
+- **VAL-001**: Successful deployment to SIT verified by health check.
+- **VAL-002**: Blockage of production deployment without manual approvals.
+- **VAL-003**: Verification that only `main` branch builds can target production.
+
+## 11. Related Specifications / Further Reading
+
+- [spec-process-cicd-ci.md](spec-process-cicd-ci.md)
+- [spec-process-cicd-container.md](spec-process-cicd-container.md)
+- [.github/instructions/kubernetes-deployment-best-practices.instructions.md](../.github/instructions/kubernetes-deployment-best-practices.instructions.md)
+
 
 ```yaml
 # Upstream Trigger

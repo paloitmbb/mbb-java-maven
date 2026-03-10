@@ -2,102 +2,117 @@
 title: CI/CD Workflow Specification - Container
 version: 1.0
 date_created: 2026-03-05
-last_updated: 2026-03-05
+last_updated: 2026-03-10
 owner: DevOps Team
 tags: [process, cicd, github-actions, automation, docker, container, trivy, slsa, acr, azure, security]
 ---
 
-## Workflow Overview
+# Introduction
 
-**Purpose**: Build a Docker image from the pre-built JAR artifact, scan it for vulnerabilities, attach SLSA provenance attestation, and push it to Azure Container Registry with an immutable SHA-only tag.
-**Trigger Events**: Successful completion of CI workflow (`workflow_run`); `workflow_dispatch`
-**Target Environments**: Azure Container Registry (ACR) — staging/production feed
-**Workflow File**: `.github/workflows/container.yml`
-**Workflow Name (immutable)**: `Container` ← **Never rename — `deploy.yml` triggers on this exact name**
-**Chain Position**: Link 2 of 3 — downstream of `CI`, upstream of `Deploy`
+This specification defines the Containerization workflow, which packages the application JAR into a secure Docker image, performs vulnerability scans, and pushes it to Azure Container Registry (ACR).
 
----
+## 1. Purpose & Scope
 
-## Execution Flow Diagram
+The purpose of this specification is to provide a clear and unambiguous definition of the Container workflow. It covers the Docker build process, vulnerability scanning gates, SLSA level 2 provenance attestation, and metadata management for deployment.
 
-```mermaid
-graph TD
-    A([CI workflow completed successfully]) --> B[build-image]
-    B --> C[scan-image]
-    C --> D[attest-and-push]
-    D --> E([deploy-metadata artifact available
-for deploy.yml])
+## 2. Definitions
 
-    subgraph "Branch Gate"
-        D
-    end
+- **ACR**: Azure Container Registry.
+- **OIDC**: OpenID Connect.
+- **SLSA**: Supply-chain Levels for Software Artifacts.
+- **Trivy**: A vulnerability scanner for containers.
+- **Provenance**: Information about how an artifact was built.
 
-    style A fill:#e1f5fe
-    style E fill:#e8f5e8
-    style B fill:#f3e5f5
-    style C fill:#ffebee
-    style D fill:#fff3e0
+## 3. Requirements, Constraints & Guidelines
+
+- **REQ-001**: JAR artifact fetched from upstream CI run — no Maven rebuild.
+- **REQ-002**: Docker image built and saved as tarball artifact for scanning.
+- **REQ-003**: Docker layer cache shared across runs via GHA cache.
+- **REQ-004**: Trivy exits non-zero on any CRITICAL or HIGH CVE.
+- **REQ-005**: Unfixed CVEs ignored in Trivy scan for noise reduction.
+- **REQ-006**: Trivy SARIF uploaded to Security tab even on failure.
+- **REQ-007**: Azure login uses OIDC (`azure/login@v2`).
+- **REQ-008**: Image tagged with immutable commit SHA only.
+- **REQ-009**: SLSA Level 2 provenance attestation generated and pushed.
+- **REQ-010**: `deploy-metadata` artifact contains `commit-sha`, `image-tag`, `image-digest`.
+- **REQ-011**: `attest-and-push` restricted to `main` and `develop` branches.
+- **REQ-012**: COMMIT_SHA resolved from `workflow_run.head_sha`.
+- **SEC-001**: No credentials stored; Azure login via OIDC only.
+- **SEC-002**: No CRITICAL or HIGH CVEs allowed in final image.
+- **SEC-003**: Image tag is commit SHA — no mutable `:latest`.
+- **CON-001**: Workflow Name must remain `Container` for downstream triggers.
+- **CON-002**: Concurrency: `container-${{ github.event.workflow_run.head_branch }}`.
+
+## 4. Interfaces & Data Contracts
+
+### Workflow Trigger
+```yaml
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
 ```
 
----
+### Artifact Contract
+The workflow produces an artifact named `deploy-metadata` containing:
+- `commit-sha`: The SHA of the commit being deployed.
+- `image-tag`: The unique immutable tag for the image.
+- `image-digest`: The SHA256 digest of the final image.
 
-## Jobs & Dependencies
+## 5. Acceptance Criteria
 
-| Job Name | Purpose | Dependencies | Execution Context | Timeout |
-|---|---|---|---|---|
-| `build-image` | Download `app-jar`; build Docker image; save as tarball artifact | — (but requires CI success) | `ubuntu-latest` | 15 min |
-| `scan-image` | Load image tarball; run Trivy; fail on CRITICAL/HIGH; upload SARIF | `build-image` | `ubuntu-latest` | 15 min |
-| `attest-and-push` | Load image; OIDC login to Azure; push with SHA tag; generate SLSA attestation; export `deploy-metadata` | `scan-image` | `ubuntu-latest` | 15 min |
+- **AC-001**: Given a successful CI run, When the Container workflow finishes, Then a new image must exist in ACR with a SHA-based tag.
+- **AC-002**: Given a Dockerfile with a HIGH CVE, When the Trivy scan runs, Then the `scan-image` job must fail.
+- **AC-003**: Given a push to a non-protected branch, When the workflow runs, Then the `attest-and-push` job must be skipped.
 
-**Concurrency**: `container-${{ github.event.workflow_run.head_branch }}` — one active run per branch; `cancel-in-progress: true`.
+## 6. Test Automation Strategy
 
----
+- **Scanning**: Trivy (hard gate).
+- **Verification**: Attestation verification (SLSA).
+- **CI/CD Integration**: Automated via GitHub Actions `container.yml`.
 
-## Requirements Matrix
+## 7. Rationale & Context
 
-### Functional Requirements
+By separating the build into stages and avoiding Maven rebuilds, we ensure that the image contains the exact artifact produced and tested in CI. The metadata artifact ensures that downstream deployments don't need to re-query ACR for the tag.
 
-| ID | Requirement | Priority | Acceptance Criteria |
-|---|---|---|---|
-| REQ-001 | JAR artifact fetched from upstream CI run — no Maven rebuild | High | `run-id: ${{ github.event.workflow_run.id }}` on download step |
-| REQ-002 | Docker image built without push (tarball output) | High | `push: false`; `outputs: type=docker,dest=/tmp/image.tar` |
-| REQ-003 | Docker layer cache shared across runs | Medium | `cache-from/cache-to: type=gha` |
-| REQ-004 | Trivy exits non-zero on any CRITICAL or HIGH CVE | High | `exit-code: '1'`; `severity: CRITICAL,HIGH` |
-| REQ-005 | Unfixed CVEs ignored in Trivy scan | Medium | `ignore-unfixed: true` |
-| REQ-006 | Trivy SARIF uploaded to Security tab even on failure | High | `upload-sarif` step has `if: always()` |
-| REQ-007 | Azure login uses OIDC — no stored credentials | High | `azure/login@v2` with `client-id`, `tenant-id`, `subscription-id` |
-| REQ-008 | Image tagged with immutable commit SHA only | High | Tag format: `{ACR_LOGIN_SERVER}/{ACR_REPOSITORY}:{COMMIT_SHA}` |
-| REQ-009 | SLSA Level 2 provenance attestation generated and pushed | High | `actions/attest-build-provenance@v2` with digest |
-| REQ-010 | `deploy-metadata` artifact contains `commit-sha`, `image-tag`, `image-digest` | High | Three separate files in single artifact |
-| REQ-011 | `attest-and-push` restricted to `main` and `develop` branches | High | Branch gate condition in job `if:` |
-| REQ-012 | COMMIT_SHA resolved from `workflow_run.head_sha` not `github.sha` | High | `env.COMMIT_SHA: ${{ github.event.workflow_run.head_sha \|\| github.sha }}` |
+## 8. Dependencies & External Integrations
 
-### Security Requirements
+### External Systems
+- **EXT-001**: Azure Container Registry (ACR) - Image storage.
+- **EXT-002**: GitHub Security Tab - Trivy scan results.
 
-| ID | Requirement | Implementation Constraint |
-|---|---|---|
-| SEC-001 | No credentials stored; Azure login via OIDC only | `id-token: write` permission; no password/PAT |
-| SEC-002 | No CRITICAL or HIGH CVEs allowed in final image | Trivy hard gate; build fails if found |
-| SEC-003 | Image tag is commit SHA — no mutable `:latest` | Tag derived from `COMMIT_SHA` env var |
-| SEC-004 | SLSA provenance attestation links image to workflow run | `attest-build-provenance` with digest |
-| SEC-005 | `attestations: write` scoped only to `attest-and-push` job | Minimal permission scope |
-| SEC-006 | Container image tarball has 1-day retention | Ephemeral; not intended for long-term storage |
+### Infrastructure Dependencies
+- **INF-001**: Ubuntu Latest - GitHub-hosted runner.
 
-### Performance Requirements
+### Technology Platform Dependencies
+- **PLT-001**: Docker - Containerization engine.
+- **PLT-002**: Azure CLI - ACR authentication and push.
 
-| ID | Metric | Target | Measurement Method |
-|---|---|---|---|
-| PERF-001 | `build-image` duration | ≤ 15 min | Job timeout |
-| PERF-002 | Docker build cache hit rate | > 50% on re-runs | GHA cache usage metrics |
-| PERF-003 | Total pipeline wall-clock | ≤ 45 min (from CI trigger) | GitHub Actions run duration |
+## 9. Examples & Edge Cases
 
----
-
-## Input/Output Contracts
-
-### Inputs
-
+### SLSA Attestation Step
 ```yaml
+- name: Generate SLSA attestation
+  uses: actions/attest-build-provenance@v2
+  with:
+    subject-name: ${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}
+    subject-digest: ${{ steps.push.outputs.digest }}
+    push-to-registry: true
+```
+
+## 10. Validation Criteria
+
+- **VAL-001**: Tagged image present in ACR following a successful `main` CI run.
+- **VAL-002**: Trivy scan failure correctly stopping the pipeline.
+- **VAL-003**: Verification that `deploy-metadata` artifact contains correct image-tag.
+
+## 11. Related Specifications / Further Reading
+
+- [spec-process-cicd-ci.md](spec-process-cicd-ci.md)
+- [spec-process-cicd-deploy.md](spec-process-cicd-deploy.md)
+- [.github/instructions/containerization-docker-best-practices.instructions.md](../.github/instructions/containerization-docker-best-practices.instructions.md)
+
 # Upstream Trigger
 trigger: workflow_run
 workflows: ['CI']       # CRITICAL: must match ci.yml name exactly

@@ -2,101 +2,113 @@
 title: CI/CD Workflow Specification - PR Validation
 version: 1.0
 date_created: 2026-03-05
-last_updated: 2026-03-05
+last_updated: 2026-03-10
 owner: DevOps Team
 tags: [process, cicd, github-actions, automation, pull-request, validation, java, maven, security]
 ---
 
-## Workflow Overview
+# Introduction
 
-**Purpose**: Validate all pull requests targeting `main` or `develop` by running quality, security, and coverage checks before merge.
-**Trigger Events**: Pull request opened/synchronized/reopened targeting `main` or `develop`
-**Target Environments**: PR sandbox (ephemeral, no deployment)
-**Workflow File**: `.github/workflows/pr-validation.yml`
-**Workflow Name (immutable)**: `PR Validation`
-**Chain Position**: Standalone — no downstream `workflow_run` consumer
+This specification defines the manual validation process for all Pull Requests (PRs) targeting the main development branches. It ensures code quality, security, and coverage standards are met before merging.
 
----
+## 1. Purpose & Scope
 
-## Execution Flow Diagram
+The purpose of this specification is to provide a clear and unambiguous definition of the PR Validation workflow. It covers Maven builds, fast-feedback unit testing, parallel security gates, and static analysis for Java 11 pull requests.
 
-```mermaid
-graph TD
-    A([Pull Request to main / develop]) --> B[setup-cache]
+## 2. Definitions
 
-    B --> C[build-and-test]
-    B --> D[code-quality]
-    B --> E[codeql]
+- **PR**: Pull Request.
+- **JaCoCo**: Java Code Coverage.
+- **SAST**: Static Application Security Testing.
+- **Checkstyle**: Development tool to help programmers write Java code that adheres to a coding standard.
+- **SpotBugs**: A program which uses static analysis to look for bugs in Java code.
 
-    B --> F[secrets-scan]
-    B --> G[dependency-review]
+## 3. Requirements, Constraints & Guidelines
 
-    C --> H([PR Checks Complete])
-    D --> H
-    E --> H
-    F --> H
-    G --> H
+- **REQ-001**: Maven dependency cache pre-warmed before parallel test/quality jobs.
+- **REQ-002**: Unit tests compile and pass on every PR.
+- **REQ-003**: Line coverage ≥ 80% enforced as hard gate via JaCoCo.
+- **REQ-004**: Test results published to GitHub Checks UI.
+- **REQ-005**: Checkstyle: zero violations.
+- **REQ-006**: SpotBugs: zero violations.
+- **REQ-007**: CodeQL SAST runs on non-fork PRs only.
+- **REQ-008**: Full git history available for secrets scanning (`fetch-depth: 0`).
+- **REQ-009**: Dependency review comments on PR on failure.
+- **REQ-010**: GPL-2.0 and AGPL-3.0 licenses blocked.
+- **SEC-001**: No credentials stored in repo (`persist-credentials: false`).
+- **SEC-002**: Secrets scan on full commit history.
+- **SEC-003**: CodeQL results visible in Security tab.
+- **SEC-004**: High-severity CVEs in new dependencies block merge.
+- **CON-001**: Concurrency: One run per PR number with `cancel-in-progress: true`.
+- **GUD-001**: Expected value must be first in assertions: `assertEquals(expected, actual)`.
 
-    style A fill:#e1f5fe
-    style H fill:#e8f5e8
-    style C fill:#f3e5f5
-    style D fill:#f3e5f5
-    style E fill:#fff3e0
-    style F fill:#ffebee
-    style G fill:#ffebee
+## 4. Interfaces & Data Contracts
+
+### Workflow Trigger
+```yaml
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
 ```
 
----
+### Published Reports
+- **Surefire Reports**: XML files from `target/surefire-reports/`.
+- **JaCoCo Report**: HTML coverage report uploaded as artifact.
+- **Quality Reports**: Checkstyle and SpotBugs XML results.
 
-## Jobs & Dependencies
+## 5. Acceptance Criteria
 
-| Job Name | Purpose | Dependencies | Execution Context | Timeout |
-|---|---|---|---|---|
-| `setup-cache` | Pre-warm Maven dependency cache | — | `ubuntu-latest` | 10 min |
-| `build-and-test` | Compile, unit test, JaCoCo coverage gate, publish results | `setup-cache` | `ubuntu-latest` | 20 min |
-| `code-quality` | Checkstyle + SpotBugs static analysis | `setup-cache` | `ubuntu-latest` | 10 min |
-| `codeql` | CodeQL SAST scan (non-fork PRs only) | `setup-cache` | `ubuntu-latest` | 30 min |
-| `secrets-scan` | Gitleaks full-history secrets detection | — (fully parallel) | `ubuntu-latest` | 5 min |
-| `dependency-review` | Check new deps for CVEs and disallowed licenses | — (fully parallel) | `ubuntu-latest` | 10 min |
+- **AC-001**: Given a PR with passing tests and 85% coverage, When the validation runs, Then all checks must turn green.
+- **AC-002**: Given a PR with a Checkstyle violation, When the validation runs, Then the `code-quality` job must fail.
+- **AC-003**: Given a PR that adds a GPLv2 dependency, When the validation runs, Then the `dependency-review` job must fail.
 
-**Concurrency**: One run per PR number; newer runs cancel older runs (`cancel-in-progress: true`).
+## 6. Test Automation Strategy
 
----
+- **Test Levels**: Unit testing only.
+- **Frameworks**: JUnit 4.13.2 (specified in `pom.xml`).
+- **CI/CD Integration**: Automated via GitHub Actions `pr-validation.yml`.
 
-## Requirements Matrix
+## 7. Rationale & Context
 
-### Functional Requirements
+PR validation is the first line of defense. By running checks in parallel after a cache setup job, we maximize developer feedback speed while ensuring strict enforcement of project standards.
 
-| ID | Requirement | Priority | Acceptance Criteria |
-|---|---|---|---|
-| REQ-001 | Maven dependency cache pre-warmed before parallel test/quality jobs | High | `setup-cache` completes before `build-and-test` and `code-quality` start |
-| REQ-002 | Unit tests compile and pass on every PR | High | Zero test failures; `mvn test` exits 0 |
-| REQ-003 | Line coverage ≥ 80% enforced as hard gate | High | JaCoCo `check` goal exits non-zero when below threshold; build fails |
-| REQ-004 | Test results published to GitHub Checks UI | Medium | XML reports from `target/surefire-reports/` attached to PR checks |
-| REQ-005 | Checkstyle: zero violations | High | `checkstyle:check` exits 0 |
-| REQ-006 | SpotBugs: zero violations | High | `spotbugs:check` exits 0 |
-| REQ-007 | CodeQL SAST runs on non-fork PRs only | Medium | Skipped with `if: github.event.pull_request.head.repo.full_name == github.repository` |
-| REQ-008 | Full git history available for Gitleaks | High | `fetch-depth: 0` on `secrets-scan` checkout |
-| REQ-009 | Dependency review comments on PR on failure | Medium | `comment-summary-in-pr: on-failure` |
-| REQ-010 | GPL-2.0 and AGPL-3.0 licenses blocked | High | `deny-licenses: GPL-2.0, AGPL-3.0` causes build failure |
+## 8. Dependencies & External Integrations
 
-### Security Requirements
+### External Systems
+- **EXT-001**: GitHub PR Checks - Status reporting.
+- **EXT-002**: GitHub Security Tab - Vulnerability visualization.
 
-| ID | Requirement | Implementation Constraint |
-|---|---|---|
-| SEC-001 | No credentials stored in repo | `persist-credentials: false` on all checkouts |
-| SEC-002 | Gitleaks scans full commit history | `fetch-depth: 0` required for all history |
-| SEC-003 | CodeQL results visible in Security tab | `security-events: write` permission scoped to `codeql` job only |
-| SEC-004 | High-severity CVEs in new dependencies block merge | `fail-on-severity: high` on dependency-review |
-| SEC-005 | Gitleaks license handled via secret | `GITLEAKS_LICENSE` secret (required for private repos) |
+### Infrastructure Dependencies
+- **INF-001**: Ubuntu Latest - GitHub-hosted runner.
 
-### Performance Requirements
+### Technology Platform Dependencies
+- **PLT-001**: Java 11 (Source/Target).
+- **PLT-002**: Maven 3.8.x.
 
-| ID | Metric | Target | Measurement Method |
-|---|---|---|---|
-| PERF-001 | Total wall-clock time | ≤ 20 min | GitHub Actions run duration |
-| PERF-002 | `setup-cache` duration | ≤ 10 min | Individual job runtime |
-| PERF-003 | Maven cache hit rate | > 80% | Cache restore key match |
+## 9. Examples & Edge Cases
+
+### Gitleaks Configuration Step
+```yaml
+- name: Secrets Scan
+  uses: gitleaks/gitleaks-action@v2
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+```
+
+## 10. Validation Criteria
+
+- **VAL-001**: Mandatory green status for all jobs before PR merge.
+- **VAL-002**: Correct failure of JaCoCo check when coverage drops.
+- **VAL-003**: CodeQL successfully scanning internal PRs.
+
+## 11. Related Specifications / Further Reading
+
+- [spec-process-cicd-ci.md](spec-process-cicd-ci.md)
+- [.github/instructions/testing.instructions.md](../.github/instructions/testing.instructions.md)
+- [.github/instructions/git.instructions.md](../.github/instructions/git.instructions.md)
+
 
 ---
 

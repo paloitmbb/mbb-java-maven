@@ -28,10 +28,20 @@ permissions:
 # Workflow-level env — use workflow_run SHA so tags are always correct.
 # In workflow_run context github.sha resolves to the default branch HEAD,
 # NOT the actual triggering commit.  Always prefer head_sha.
+#
+# Full image name convention: CONTAINER_REGISTRY/APP_NAME:IMAGE_TAG
+#   CONTAINER_REGISTRY — ACR login server  (e.g. myregistry.azurecr.io)
+#                        set as a repository/org variable; also used as docker-login login-server
+#   APP_NAME           — image repository within the registry (e.g. hello-java)
+#                        set as a repository variable; change per repo when reusing this workflow
+#   IMAGE_TAG          — version tag derived from ci.yml (e.g. v1.0.0.abc1234)
+#   FULL_IMAGE_NAME    — pre-composed registry/app-name path (no tag); used in all docker commands
 # ---------------------------------------------------------------------------
 env:
-  IMAGE_NAME: ${{ vars.CONTAINER_REGISTRY_NAME }}
-  IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}   # e.g. myregistry.azurecr.io
+  APP_NAME:           ${{ vars.APP_NAME }}              # e.g. hello-java (change per repo)
+  IMAGE_TAG:          ${{ github.event.workflow_run.head_sha || github.sha }}
+  FULL_IMAGE_NAME:    ${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}
 
 jobs:
 
@@ -102,13 +112,13 @@ jobs:
             --build-arg APP_VERSION="${IMAGE_TAG}" \
             --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
             --build-arg REPO_URL="${{ github.server_url }}/${{ github.repository }}" \
-            --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
+            --tag "${FULL_IMAGE_NAME}:${IMAGE_TAG}" \
             .
 
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@0.29.0
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          image-ref: ${{ env.FULL_IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
@@ -143,14 +153,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # TODO: set ACR_LOGIN_SERVER variable (e.g. myregistry.azurecr.io)
       - name: ACR login
         if: >
           github.event_name == 'workflow_dispatch' ||
           github.event.workflow_run.head_branch == 'main'
         uses: azure/docker-login@v2
         with:
-          login-server: ${{ env.IMAGE_NAME }}
+          login-server: ${{ env.CONTAINER_REGISTRY }}
 
       - name: Tag and push to ACR
         if: >
@@ -159,14 +168,14 @@ jobs:
         id: push
         run: |
           # Push versioned tag
-          docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker push "${FULL_IMAGE_NAME}:${IMAGE_TAG}"
 
           # Push latest tag
-          docker tag "${IMAGE_NAME}:${IMAGE_TAG}" "${IMAGE_NAME}:latest"
-          docker push "${IMAGE_NAME}:latest"
+          docker tag "${FULL_IMAGE_NAME}:${IMAGE_TAG}" "${FULL_IMAGE_NAME}:latest"
+          docker push "${FULL_IMAGE_NAME}:latest"
 
-          echo "image=${IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}"          >> "$GITHUB_OUTPUT"
+          echo "image=${FULL_IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"                >> "$GITHUB_OUTPUT"
 
       - name: Write image publish summary
         if: steps.push.outcome == 'success'
