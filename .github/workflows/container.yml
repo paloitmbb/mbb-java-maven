@@ -145,6 +145,7 @@ jobs:
             --format sarif \
             --output trivy-results.sarif \
             --severity CRITICAL,HIGH \
+            --scanners vuln \
             --exit-code 1 \
             --ignore-unfixed \
             "${FULL_IMAGE_NAME}:${IMAGE_TAG}"
