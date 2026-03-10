@@ -1,45 +1,45 @@
-version: 2
+# version: 2
 
-updates:
-  # Maven dependencies (pom.xml)
-  - package-ecosystem: "maven"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "UTC"
-    labels:
-      - "dependencies"
-      - "java"
-    open-pull-requests-limit: 10
-    groups:
-      # Group Spring Boot libraries together (avoid breaking changes across PRs)
-      spring-boot:
-        patterns:
-          - "org.springframework.boot:*"
-      # Group Spring Framework libraries
-      spring-framework:
-        patterns:
-          - "org.springframework:*"
-          - "org.springframework.security:*"
-      # Group testing libraries
-      testing:
-        patterns:
-          - "junit:*"
-          - "org.junit.jupiter:*"
-          - "org.mockito:*"
-          - "org.assertj:*"
+# updates:
+#   # Maven dependencies (pom.xml)
+#   - package-ecosystem: "maven"
+#     directory: "/"
+#     schedule:
+#       interval: "weekly"
+#       day: "monday"
+#       time: "06:00"
+#       timezone: "UTC"
+#     labels:
+#       - "dependencies"
+#       - "java"
+#     open-pull-requests-limit: 10
+#     groups:
+#       # Group Spring Boot libraries together (avoid breaking changes across PRs)
+#       spring-boot:
+#         patterns:
+#           - "org.springframework.boot:*"
+#       # Group Spring Framework libraries
+#       spring-framework:
+#         patterns:
+#           - "org.springframework:*"
+#           - "org.springframework.security:*"
+#       # Group testing libraries
+#       testing:
+#         patterns:
+#           - "junit:*"
+#           - "org.junit.jupiter:*"
+#           - "org.mockito:*"
+#           - "org.assertj:*"
 
-  # GitHub Actions (workflows)
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:30"
-      timezone: "UTC"
-    labels:
-      - "dependencies"
-      - "github-actions"
-    open-pull-requests-limit: 5
+#   # GitHub Actions (workflows)
+#   - package-ecosystem: "github-actions"
+#     directory: "/"
+#     schedule:
+#       interval: "weekly"
+#       day: "monday"
+#       time: "06:30"
+#       timezone: "UTC"
+#     labels:
+#       - "dependencies"
+#       - "github-actions"
+#     open-pull-requests-limit: 5

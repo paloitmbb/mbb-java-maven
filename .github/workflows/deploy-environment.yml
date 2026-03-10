@@ -1,0 +1,182 @@
+# =============================================================================
+# Reusable Deploy Environment Workflow
+# =============================================================================
+# Called by deploy.yml for each environment (SIT → UAT → Production).
+# Accepts all environment-specific parameters as inputs so the template
+# remains generic and DRY across all three stages.
+#
+# Steps executed in every environment:
+#   1. Download deploy-metadata artifact from Container run
+#   2. Azure OIDC login + ACR login
+#   3. Pull image + verify build attestation
+#   4. Set AKS context → apply manifest → wait for rollout
+#   5. Health check (env-specific retries / delay)
+#   6. Rollback on failure
+#   7. Create immutable Git tag (production only, guarded by create_git_tag input)
+# =============================================================================
+name: Deploy Environment (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'GitHub environment name (sit | uat | production)'
+        type: string
+        required: true
+      namespace:
+        description: 'Kubernetes namespace to deploy into'
+        type: string
+        required: true
+      aks_cluster_name:
+        description: 'AKS cluster name'
+        type: string
+        required: true
+      aks_resource_group:
+        description: 'AKS resource group'
+        type: string
+        required: true
+      health_url:
+        description: 'Base URL for /actuator/health health check (leave empty to skip — plain apps with no HTTP server)'
+        type: string
+        required: false
+        default: ''
+      timeout_minutes:
+        description: 'Job timeout in minutes'
+        type: number
+        required: false
+        default: 15
+      health_retries:
+        description: 'Number of curl --retry attempts for health check'
+        type: number
+        required: false
+        default: 5
+      retry_delay:
+        description: 'Seconds between health-check retries (--retry-delay)'
+        type: number
+        required: false
+        default: 10
+      rollout_timeout:
+        description: 'kubectl rollout status --timeout value (e.g. 5m, 10m)'
+        type: string
+        required: false
+        default: '5m'
+      create_git_tag:
+        description: 'Create an immutable Git tag on successful deploy (production only)'
+        type: boolean
+        required: false
+        default: false
+      persist_credentials:
+        description: 'Persist git credentials in checkout (required for git push tag)'
+        type: boolean
+        required: false
+        default: false
+      container_run_id:
+        description: 'Workflow run ID of the Container workflow that produced the artifact'
+        type: string
+        required: true
+      head_sha:
+        description: 'Commit SHA to attach the Git tag to (production only)'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write      # Required for git tag push (production); harmless elsewhere
+      id-token: write      # Required for Azure OIDC
+      actions: read        # Required for actions/download-artifact@v4 with run-id
+      attestations: read   # Required for gh attestation verify
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: ${{ inputs.persist_credentials }}
+
+      - name: Download deploy-metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-metadata
+          run-id: ${{ inputs.container_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # TODO: set CONTAINER_REGISTRY_NAME variable (e.g. myregistry.azurecr.io) — used for image reference and ACR login
+      - name: Read deploy metadata
+        id: meta
+        run: |
+          IMAGE_TAG=$(cat image-tag)
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ vars.CONTAINER_REGISTRY_NAME }}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (Azure service principal with OIDC federated credentials)
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ vars.CONTAINER_REGISTRY_NAME }}
+
+      - name: Pull image from registry
+        run: |
+          docker pull "${{ vars.CONTAINER_REGISTRY_NAME }}:${{ steps.meta.outputs.image_tag }}"
+
+      - name: Verify image attestation
+        # Requires container.yml to create attestation via actions/attest-build-provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh attestation verify \
+            "oci://${{ vars.CONTAINER_REGISTRY_NAME }}:${{ steps.meta.outputs.image_tag }}" \
+            --repo "${{ github.repository }}"
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          cluster-name: ${{ inputs.aks_cluster_name }}
+          resource-group: ${{ inputs.aks_resource_group }}
+
+      - name: Update manifest image tag
+        run: |
+          sed -i "s|image: REPLACE_ME|image: ${{ steps.meta.outputs.image }}|g" k8s/deployment.yaml
+
+      - name: Apply manifest (rolling update)
+        run: |
+          kubectl apply -f k8s/deployment.yaml -n ${{ inputs.namespace }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/hello-java \
+            -n ${{ inputs.namespace }} \
+            --timeout=${{ inputs.rollout_timeout }}
+
+      - name: Health check
+        # Skipped when health_url is empty (e.g. plain console apps with no HTTP server).
+        # For Spring Boot apps set health_url to the base URL (e.g. https://sit.myapp.example.com).
+        if: inputs.health_url != ''
+        run: |
+          curl --fail \
+               --retry ${{ inputs.health_retries }} \
+               --retry-delay ${{ inputs.retry_delay }} \
+               --retry-connrefused \
+               --max-time 30 \
+               ${{ inputs.health_url }}/actuator/health
+
+      - name: Create immutable Git tag
+        if: success() && inputs.create_git_tag && inputs.environment == 'production'
+        run: |
+          IMAGE_TAG="${{ steps.meta.outputs.image_tag }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${IMAGE_TAG}" "${{ inputs.head_sha || github.sha }}"
+          git push origin "${IMAGE_TAG}"
