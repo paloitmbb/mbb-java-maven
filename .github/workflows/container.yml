@@ -42,6 +42,7 @@ env:
   APP_NAME:           ${{ vars.APP_NAME }}              # e.g. hello-java (change per repo)
   IMAGE_TAG:          ${{ github.event.workflow_run.head_sha || github.sha }}
   FULL_IMAGE_NAME:    ${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}
+  TRIVY_BIN: /home/runner/.local/bin/trivy-bin/trivy
 
 jobs:
 
@@ -172,6 +173,7 @@ jobs:
         if: >
           github.event_name == 'workflow_dispatch' ||
           github.event.workflow_run.head_branch == 'main'
+        id: azure-login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -184,7 +186,9 @@ jobs:
           github.event.workflow_run.head_branch == 'main'
         uses: azure/docker-login@v2
         with:
-          login-server: ${{ env.CONTAINER_REGISTRY }}
+          login-server: acrmbbsandbox.azurecr.io
+          username: ${{ steps.azure-login.outputs.client-id || secrets.AZURE_CLIENT_ID }}
+          password: ${{ steps.azure-login.outputs.access-token || secrets.AZURE_CLIENT_SECRET }}
 
       - name: Tag and push to ACR
         if: >
