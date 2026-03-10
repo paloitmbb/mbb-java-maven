@@ -205,13 +205,13 @@ az role assignment create \
   --scope "$AKS_STAGING_ID"
 
 # Kubernetes-level (requires --enable-azure-rbac on cluster):
-# Grants write access to Deployments, Pods, Services within the namespace.
-# Does NOT grant RBAC resource management (least privilege).
+# Grants write access to Deployments, Pods, Services within the cluster scope.
+# Note: Use "Azure Kubernetes Service RBAC Admin" if Cluster Admin (superuser) is not required.
 az role assignment create \
   --assignee-object-id "$SP_OBJECT_ID" \
   --assignee-principal-type ServicePrincipal \
-  --role "Azure Kubernetes Service RBAC Writer" \
-  --scope "$AKS_STAGING_ID/namespaces/staging"
+  --role "Azure Kubernetes Service RBAC Admin" \
+  --scope "$AKS_STAGING_ID"
 
 # --- Production AKS: allow GitHub Actions SP to run kubectl commands ---
 AKS_PROD_ID=$(az aks show \
@@ -228,8 +228,8 @@ az role assignment create \
 az role assignment create \
   --assignee-object-id "$SP_OBJECT_ID" \
   --assignee-principal-type ServicePrincipal \
-  --role "Azure Kubernetes Service RBAC Writer" \
-  --scope "$AKS_PROD_ID/namespaces/production"
+  --role "Azure Kubernetes Service RBAC Admin" \
+  --scope "$AKS_PROD_ID"
 ```
 
 ### 4.4 Configure Federated Credentials
