@@ -50,8 +50,14 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           format: spdx-json
-          output-file: sbom-${{ steps.short_sha.outputs.sha }}.spdx.json
-          artifact-name: sbom-${{ steps.short_sha.outputs.sha }}.spdx
+          output-file: sbom-${{ steps.short_sha.outputs.sha }}.json
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ steps.short_sha.outputs.sha }}
+          path: sbom-${{ steps.short_sha.outputs.sha }}.json
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Job 2: CodeQL SAST — push-triggered and weekly scheduled (no build dependency)
