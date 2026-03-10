@@ -180,15 +180,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: ACR login
-        if: >
-          github.event_name == 'workflow_dispatch' ||
-          github.event.workflow_run.head_branch == 'main'
-        uses: azure/docker-login@v2
-        with:
-          login-server: acrmbbsandbox.azurecr.io
-          username: ${{ steps.azure-login.outputs.client-id || secrets.AZURE_CLIENT_ID }}
-          password: ${{ steps.azure-login.outputs.access-token || secrets.AZURE_CLIENT_SECRET }}
+      - name: ACR Login
+        run: |
+          echo "Logging in to Azure Container Registry..."
+          az acr login --name ${{ env.CONTAINER_REGISTRY }} || {
+            echo "ERROR: ACR login failed!" >&2
+            exit 1
+          }
+          echo "ACR login successful!"
 
       - name: Tag and push to ACR
         if: >
