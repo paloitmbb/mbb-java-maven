@@ -48,25 +48,22 @@ Pre-downloads all Maven dependencies into a shared cache so the 3 jobs below don
 - Runs SpotBugs — finds likely bugs before they reach production
 - Uploads the quality reports as an artifact (kept 7 days)
 
-**4. codeql** *(needs the cache, runs in parallel)*
-- GitHub's own static security analysis (SAST)
-- Scans for security vulnerabilities in the Java code
-- Results appear in the repository's Security tab
-- Skipped automatically for PRs coming from forks (they can't access secrets)
+**4. secrets-scan** *(runs immediately, no cache needed)*
+- Uses TruffleHog to scan the entire git history for accidentally committed API keys, passwords, or tokens
+- Scans only commits introduced in the PR
+- Fails the PR if verified secrets are found
 
-**5. secrets-scan** *(runs immediately, no cache needed)*
-- Uses Gitleaks to scan the entire git history for accidentally committed API keys, passwords, or tokens
-- Needs `GITLEAKS_LICENSE` secret for private repos
-
-**6. dependency-review** *(runs immediately, no cache needed)*
+**5. dependency-review** *(runs immediately, no cache needed)*
 - Checks every new dependency being added by the PR
 - Fails if any new dependency has a HIGH or CRITICAL CVE
 - Fails if any new dependency uses a forbidden license (GPL-2.0, AGPL-3.0)
 - Posts a comment on the PR explaining what it found
 
 ### What you need first
-- `GITLEAKS_LICENSE` secret set in repo settings (private repos only)
+- GitHub Advanced Security (GHAS) enabled for dependency-review
 - pom.xml must have: JaCoCo plugin with 80% gate, Surefire plugin, Checkstyle plugin, SpotBugs plugin
+
+**Note:** CodeQL SAST has been removed from PR validation to improve PR execution time. CodeQL still runs on the main branch via the ci.yml workflow.
 
 ---
 
@@ -78,28 +75,24 @@ Pre-downloads all Maven dependencies into a shared cache so the 3 jobs below don
 
 ### What it does
 
-**1. build-and-package** *(runs first)*
+**1. sbom** *(runs in parallel)*
+- Submits the full dependency graph to GitHub, which powers Dependabot alerts
+- Generates an SPDX-format Software Bill of Materials (SBOM) — a legal/compliance document listing every library in the app
+
+**2. codeql** *(runs in parallel)*
+- GitHub's own static security analysis (SAST)
+- Scans for security vulnerabilities in the Java code
+- Results appear in the repository's Security tab
+- Also runs on the weekly Sunday schedule (required by some compliance frameworks)
+
+**3. build-and-package** *(runs after jobs 1 and 2 complete)*
 - Full build: compile → unit tests → integration tests → package
 - Enforces 80% code coverage
-- Normalises the JAR filename to `app.jar`
+- Creates a versioned JAR: `{artifactId}-{version}.{7-char-sha}.jar`
 - Uploads three artifacts:
   - `test-reports` — surefire XML files (7 days)
   - `coverage-report` — JaCoCo HTML (7 days)
   - **`app-jar`** — the production JAR (3 days) → consumed by the container workflow
-
-**2. security-gate** *(runs after build, in parallel with sbom and codeql)*
-- OWASP Dependency-Check scans all Maven dependencies for known CVEs
-- **Fails the build** if any CVE has a CVSS score of 7 or above (High/Critical)
-- Uploads findings to the Security tab as SARIF
-- Saves full reports (HTML, JSON, SARIF) for 30 days — useful for compliance audits
-
-**3. sbom** *(runs in parallel)*
-- Submits the full dependency graph to GitHub, which powers Dependabot alerts
-- Generates an SPDX-format Software Bill of Materials (SBOM) — a legal/compliance document listing every library in the app
-
-**4. codeql** *(runs in parallel)*
-- Same SAST scanning as PR validation, but for every push
-- Also runs on the weekly Monday schedule (required by some compliance frameworks)
 
 ### Key rule
 `name: CI` — this exact name is referenced by the container workflow. Changing it breaks the pipeline.

@@ -40,7 +40,7 @@ Or enable features individually:
 
 | GHAS Feature | Where It Runs | Behaviour |
 |---|---|---|
-| CodeQL code scanning | `pr-validation.yml` (`codeql` job on every PR) + `ci.yml` (`codeql` job on push to main/develop + weekly **Sunday 21:00 UTC** / Monday 05:00 UTC+8) | Results appear in the Security tab. PRs from forks skip this job (no secret access). |
+| CodeQL code scanning | `ci.yml` (`codeql` job on push to main + weekly **Sunday 21:00 UTC** / Monday 05:00 UTC+8) | Results appear in the Security tab. CodeQL has been removed from PR validation to reduce PR execution time; security scanning still occurs on the main branch. |
 | Secret scanning (push protection) | GitHub-native enforcement on every push | Complemented by the `secrets-scan` job in `pr-validation.yml` (Gitleaks), which deep-scans git history for leaked credentials. |
 | Dependency graph + Dependabot alerts | `ci.yml` `sbom` job submits the full Maven dependency snapshot via `maven-dependency-submission-action`; `.github/dependabot.yml` schedules automated update PRs | Dependabot alert emails are sent to repo admins. |
 

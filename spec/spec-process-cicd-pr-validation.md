@@ -31,16 +31,16 @@ The purpose of this specification is to provide a clear and unambiguous definiti
 - **REQ-004**: Test results published to GitHub Checks UI.
 - **REQ-005**: Checkstyle: zero violations.
 - **REQ-006**: SpotBugs: zero violations.
-- **REQ-007**: CodeQL SAST runs on non-fork PRs only.
-- **REQ-008**: Full git history available for secrets scanning (`fetch-depth: 0`).
-- **REQ-009**: Dependency review comments on PR on failure.
-- **REQ-010**: GPL-2.0 and AGPL-3.0 licenses blocked.
+- **REQ-007**: Full git history available for secrets scanning (`fetch-depth: 0`).
+- **REQ-008**: Dependency review comments on PR on failure.
+- **REQ-009**: GPL-2.0 and AGPL-3.0 licenses blocked.
 - **SEC-001**: No credentials stored in repo (`persist-credentials: false`).
 - **SEC-002**: Secrets scan on full commit history.
-- **SEC-003**: CodeQL results visible in Security tab.
-- **SEC-004**: High-severity CVEs in new dependencies block merge.
+- **SEC-003**: High-severity CVEs in new dependencies block merge.
 - **CON-001**: Concurrency: One run per PR number with `cancel-in-progress: true`.
 - **GUD-001**: Expected value must be first in assertions: `assertEquals(expected, actual)`.
+
+**Note:** CodeQL SAST has been removed from PR validation (previously REQ-007) to reduce PR execution time. CodeQL now runs exclusively in the ci.yml workflow on the main branch.
 
 ## 4. Interfaces & Data Contracts
 
@@ -101,7 +101,7 @@ PR validation is the first line of defense. By running checks in parallel after 
 
 - **VAL-001**: Mandatory green status for all jobs before PR merge.
 - **VAL-002**: Correct failure of JaCoCo check when coverage drops.
-- **VAL-003**: CodeQL successfully scanning internal PRs.
+- **VAL-003**: ~~CodeQL successfully scanning internal PRs~~ **(REMOVED)** - CodeQL now runs in ci.yml only.
 
 ## 11. Related Specifications / Further Reading
 
@@ -123,7 +123,7 @@ branches: [main, develop]
 
 # Pull Request Context
 gh.event.pull_request.number: int     # Used in concurrency group
-gh.event.pull_request.head.repo.full_name: string  # Fork detection for CodeQL
+gh.event.pull_request.base.sha: string  # Base commit for TruffleHog secrets scan
 ```
 
 ### Outputs
@@ -136,7 +136,8 @@ quality-reports: files         # checkstyle-result.xml + spotbugsXml.xml — ret
 
 # GitHub Checks
 test-results-check: GitHub Checks entry with pass/fail counts
-codeql-alerts: GitHub Security tab (advisory)
+
+# Note: codeql-alerts removed - CodeQL runs in ci.yml only
 ```
 
 ### Secrets & Variables
@@ -152,7 +153,7 @@ codeql-alerts: GitHub Security tab (advisory)
 
 ### Runtime Constraints
 
-- **Max single-job timeout**: 30 min (`codeql`)
+- **Max single-job timeout**: 20 min (build-and-test)
 - **Concurrency**: Scoped to `pr-${{ github.event.pull_request.number }}` — one active run per PR
 - **Cancel policy**: `cancel-in-progress: true` — older runs cancelled on new push
 
@@ -161,18 +162,18 @@ codeql-alerts: GitHub Security tab (advisory)
 - **Runner**: `ubuntu-latest` for all jobs
 - **Java**: JDK 21 (Temurin distribution) for compilation and analysis
 - **Compilation target**: Java 11 (`maven.compiler.source/target`)
-- **Fork restriction**: `codeql` skipped on fork PRs (no `security-events: write` access)
 
 ### Permissions (Minimum Required)
 
 | Job | Required Permissions |
 |---|---|
 | `setup-cache` | `contents: read` |
-| `build-and-test` | `contents: read`, `checks: write` |
+| `build-and-test` | `contents: read`, `checks: write`, `pull-requests: write` |
 | `code-quality` | `contents: read` |
-| `codeql` | `contents: read`, `security-events: write`, `actions: read` |
 | `secrets-scan` | `contents: read` |
 | `dependency-review` | `contents: read`, `pull-requests: write` |
+
+**Note:** `codeql` job removed - CodeQL runs in ci.yml workflow only.
 
 ---
 
@@ -184,10 +185,11 @@ codeql-alerts: GitHub Security tab (advisory)
 | Coverage below 80% | `jacoco:check` exits non-zero; fails `build-and-test` | Increase test coverage |
 | Checkstyle violation | `checkstyle:check` exits non-zero; fails `code-quality` | Fix formatting/style violations |
 | SpotBugs violation | `spotbugs:check` exits non-zero; fails `code-quality` | Fix bug patterns |
-| CodeQL alert | Advisory only; does not block merge | Review in Security tab |
-| Secret detected | `gitleaks-action` exits non-zero; fails `secrets-scan` | Rotate secret, clean history |
+| Secret detected | TruffleHog exits non-zero; fails `secrets-scan` | Rotate secret, clean history |
 | GPL/AGPL license | Dependency review fails + PR comment added | Replace with compatible dependency |
 | High CVE in new dep | Dependency review fails | Upgrade or replace dependency |
+
+**Note:** CodeQL alerts removed from PR validation - CodeQL runs in ci.yml and results appear in Security tab.
 
 ---
 
@@ -202,7 +204,8 @@ codeql-alerts: GitHub Security tab (advisory)
 | Secrets Detection | No secrets in commit history | None |
 | Dependency Licenses | No GPL-2.0 or AGPL-3.0 | None |
 | Dependency CVEs | No high/critical CVEs in new deps | None |
-| CodeQL SAST | Advisory (non-blocking) | Forks (skipped entirely) |
+
+**Note:** CodeQL SAST gate removed - runs in ci.yml only (non-blocking, advisory).
 
 ---
 
@@ -231,8 +234,7 @@ codeql-alerts: GitHub Security tab (advisory)
 | System | Integration Type | Data Exchange | SLA Requirements |
 |---|---|---|---|
 | GitHub Checks API | Write | Test result XML → Checks UI | Synchronous during run |
-| GitHub Security Tab | Write (SARIF) | CodeQL alerts | Within run completion |
-| Gitleaks License Server | Auth | License key validation | Pre-run |
+| GitHub Dependency Graph | Read | Dependency review analysis | Synchronous during run |
 
 ### Dependent Workflows
 
@@ -253,7 +255,7 @@ codeql-alerts: GitHub Security tab (advisory)
 ### Security Controls
 
 - **Access Control**: `persist-credentials: false` on all checkouts
-- **Fork Safety**: CodeQL skipped on forks; no secret exposure
+- **Access Control**: `persist-credentials: false` on all checkouts
 - **License Compliance**: GPL-2.0 and AGPL-3.0 automatically blocked
 
 ---
@@ -262,7 +264,6 @@ codeql-alerts: GitHub Security tab (advisory)
 
 | Scenario | Expected Behavior | Validation Method |
 |---|---|---|
-| Fork PR submitted | `codeql` job skipped; all other gates run | Check job skip condition in run history |
 | PR with no Java changes | All jobs still run (no path filters) | Observe run on docs-only PRs |
 | Maven cache miss | `setup-cache` succeeds but is slower; subsequent jobs unaffected | Job runtime metrics |
 | Gitleaks without license in private repo | `secrets-scan` fails | Verify `GITLEAKS_LICENSE` secret set |
@@ -276,7 +277,6 @@ codeql-alerts: GitHub Security tab (advisory)
 - **VLD-002**: `build-and-test` must fail when line coverage < 80%
 - **VLD-003**: `code-quality` must fail on any Checkstyle or SpotBugs violation
 - **VLD-004**: `secrets-scan` must use `fetch-depth: 0` (full history)
-- **VLD-005**: `codeql` must not run on fork PRs
 - **VLD-006**: Artifacts must be uploaded even when tests fail (`if: always()`)
 - **VLD-007**: `dependency-review` must post to PR on failure
 - **VLD-008**: `cancel-in-progress: true` — only one run active per PR number
