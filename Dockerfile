@@ -4,9 +4,17 @@
 # before running `docker build`. No Maven/JDK compilation happens here.
 # =============================================================================
 FROM eclipse-temurin:21-jre-alpine
+# eclipse-temurin:21-jre-alpine
 
+# ---------------------------------------------------------------------------# Patch system packages to fix vulnerabilities (e.g., CVE-2026-22184)
+#   - apk update && apk upgrade : ensures all base packages are current
+#   - rm -rf /var/cache/apk/*   : minimizes image size by clearing cache
 # ---------------------------------------------------------------------------
-# Build-time arguments (supplied by the container.yml workflow)
+RUN apk update && \
+    apk upgrade --no-cache && \
+    rm -rf /var/cache/apk/*
+
+# ---------------------------------------------------------------------------# Build-time arguments (supplied by the container.yml workflow)
 # ---------------------------------------------------------------------------
 ARG APP_VERSION=unknown
 ARG BUILD_DATE=unknown
