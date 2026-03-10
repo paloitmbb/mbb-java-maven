@@ -143,6 +143,12 @@ jobs:
             --resource-group ${{ inputs.aks_resource_group }} \
             --overwrite-existing
 
+      - name: Install kubelogin
+        run: |
+          sudo az aks install-cli
+          # Ensure it's in the PATH for the runner
+          echo "/usr/local/bin" >> $GITHUB_PATH
+
       - name: Update manifest image tag
         run: |
           sed -i "s|image: REPLACE_ME|image: ${{ steps.meta.outputs.image }}|g" k8s/deployment.yaml
