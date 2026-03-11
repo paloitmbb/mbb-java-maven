@@ -1,45 +1,76 @@
-# version: 2
+# =============================================================================
+# Dependabot Configuration
+# =============================================================================
+# Manages automated dependency updates for two ecosystems:
+#
+#   1. Maven  — keeps pom.xml dependencies on the latest patch/minor versions.
+#               Libraries are grouped into logical buckets to reduce PR noise
+#               (one PR per group instead of one PR per library).
+#
+#   2. GitHub Actions — keeps action pins in .github/workflows/ up to date.
+#               CRITICAL: after any Dependabot PR for actions/checkout,
+#               actions/setup-java, etc., verify that pinned SHA comments
+#               are updated so the workflow chain stays auditable.
+#
+# Security updates are handled separately by GitHub Advanced Security
+# (GHAS) "Dependabot security updates", which creates additional PRs
+# outside this schedule whenever a CVE is published for a dependency.
+# Enable it at: Settings → Code security and analysis → Dependabot security updates
+#
+# PR merge flow:
+#   Dependabot PR → PR Validation workflow (pr-validation.yml) must pass
+#   (Checkstyle, SpotBugs, JaCoCo ≥ 80 %, CodeQL) before merge to main.
+# =============================================================================
+version: 2
 
-# updates:
-#   # Maven dependencies (pom.xml)
-#   - package-ecosystem: "maven"
-#     directory: "/"
-#     schedule:
-#       interval: "weekly"
-#       day: "monday"
-#       time: "06:00"
-#       timezone: "UTC"
-#     labels:
-#       - "dependencies"
-#       - "java"
-#     open-pull-requests-limit: 10
-#     groups:
-#       # Group Spring Boot libraries together (avoid breaking changes across PRs)
-#       spring-boot:
-#         patterns:
-#           - "org.springframework.boot:*"
-#       # Group Spring Framework libraries
-#       spring-framework:
-#         patterns:
-#           - "org.springframework:*"
-#           - "org.springframework.security:*"
-#       # Group testing libraries
-#       testing:
-#         patterns:
-#           - "junit:*"
-#           - "org.junit.jupiter:*"
-#           - "org.mockito:*"
-#           - "org.assertj:*"
+updates:
 
-#   # GitHub Actions (workflows)
-#   - package-ecosystem: "github-actions"
-#     directory: "/"
-#     schedule:
-#       interval: "weekly"
-#       day: "monday"
-#       time: "06:30"
-#       timezone: "UTC"
-#     labels:
-#       - "dependencies"
-#       - "github-actions"
-#     open-pull-requests-limit: 5
+  # ---------------------------------------------------------------------------
+  # Ecosystem 1: Maven (pom.xml)
+  # ---------------------------------------------------------------------------
+  # Scans pom.xml in the repo root weekly (Monday 06:00 UTC).
+  # Opens a maximum of 10 PRs at once to avoid inbox overload.
+  # Libraries are grouped so related updates land in a single PR —
+  # this prevents Spring Boot and Spring Framework drifting out of sync.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "java"
+    open-pull-requests-limit: 10
+    groups:
+      # Group Spring Boot libraries together (avoid breaking changes across PRs)
+      spring-boot:
+        patterns:
+          - "org.springframework.boot:*"
+      # Group Spring Framework libraries
+      spring-framework:
+        patterns:
+          - "org.springframework:*"
+          - "org.springframework.security:*"
+      # Group testing libraries
+      testing:
+        patterns:
+          - "junit:*"
+          - "org.junit.jupiter:*"
+          - "org.mockito:*"
+          - "org.assertj:*"
+
+  # GitHub Actions (workflows)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:30"
+      timezone: "UTC"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 5
