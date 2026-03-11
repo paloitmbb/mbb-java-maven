@@ -159,12 +159,6 @@ jobs:
         run: |
           kubectl apply -f k8s/deployment.yaml -n ${{ inputs.namespace }}
 
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/hello-java \
-            -n ${{ inputs.namespace }} \
-            --timeout=${{ inputs.rollout_timeout }}
-
       - name: Health check
         # Skipped when health_url is empty (e.g. plain console apps with no HTTP server).
         # For Spring Boot apps set health_url to the base URL (e.g. https://sit.myapp.example.com).
