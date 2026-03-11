@@ -12,8 +12,8 @@ public class HelloWorld {
 
 
     public static void main(String[] args) {
-        System.out.println("Starting 30-second loop...");
-        for (int i = 1; i <= 30; i++) {
+        System.out.println("Starting 300-second loop...");
+        for (int i = 1; i <= 300; i++) {
             System.out.println("Hello, World!");
             System.out.println("This is a test Java Maven project for CI/CD pipeline testing.");
             System.out.println("Loop iteration: " + i + " (Running for " + i + " seconds)");
@@ -25,7 +25,7 @@ public class HelloWorld {
                 break;
             }
         }
-        System.out.println("30-second loop completed.");
+        System.out.println("300-second loop completed.");
     }
 
 
