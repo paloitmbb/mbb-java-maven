@@ -1,0 +1,246 @@
+# =============================================================================
+# Watchdog — Stale Run Cleanup
+# =============================================================================
+# Scans all watched workflows for two categories of stale run:
+#
+#   1. PENDING / WAITING — runs stuck in an approval gate or queued state
+#      longer than PENDING_SLA minutes (default: 60).
+#      These are cancelled via the standard cancel endpoint.
+#
+#   2. LONG-RUNNING — in_progress runs that exceed a per-workflow SLA.
+#      These are force-cancelled (GitHub's force-cancel endpoint) so stuck
+#      jobs do not hold a runner or block downstream workflow_run triggers.
+#      Regular cancel is retried as a fallback if force-cancel is rejected.
+#
+# Watched workflows and their in_progress SLA values (minutes):
+#   ci.yml              → 60  (build + SBOM + CodeQL, parallel)
+#   container.yml       → 30  (docker build + Trivy scan)
+#   deploy.yml          → 60  (SIT 15 + UAT 15 + prod 20 + buffer)
+#   pr-validation.yml   → 30  (parallel gates, normally < 20 min)
+#
+# A step summary is always written with counts and a table of actioned runs.
+# In dry-run mode (manual dispatch only) the report is produced but no runs
+# are actually cancelled.
+#
+# Triggers:
+#   schedule  — every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+#   workflow_dispatch — manual with optional dry_run, SLA overrides
+# =============================================================================
+name: Watchdog — Stale Run Cleanup
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Every 6 hours
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — detect and report only, no cancellations'
+        type: boolean
+        required: false
+        default: false
+      pending_sla_minutes:
+        description: 'Max minutes a run may stay in waiting/queued before cancel (default: 60)'
+        type: string
+        required: false
+        default: '30'
+      running_sla_minutes:
+        description: 'Fallback max minutes for in_progress if no per-workflow SLA matches (default: 120)'
+        type: string
+        required: false
+        default: '120'
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: true   # Supersede a running sweep with the newest one
+
+permissions:
+  actions: write   # Required: list and cancel workflow runs
+  contents: read   # Minimum baseline for GITHUB_TOKEN
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Sweep — single job that queries, evaluates, and cancels stale runs
+  # ---------------------------------------------------------------------------
+  sweep:
+    name: Sweep Stale Runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Per-workflow in_progress SLA (minutes) ─ tuned to normal pipeline durations
+      SLA_CI:             '60'
+      SLA_CONTAINER:      '30'
+      SLA_DEPLOY:         '30'
+      SLA_PR_VALIDATION:  '30'
+      # Approval-gate / queued SLA — sourced from dispatch input or a default
+      PENDING_SLA:        ${{ inputs.pending_sla_minutes || '30' }}
+      RUNNING_SLA:        ${{ inputs.running_sla_minutes || '30' }}
+      DRY_RUN:            ${{ inputs.dry_run || 'false' }}
+
+    steps:
+
+      # ─────────────────────────────────────────────────────────────────────
+      # Step 1 — Sweep and cancel stale runs
+      # gh CLI is pre-installed on ubuntu-latest; no checkout required.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Sweep and cancel stale runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # ── Counters ──────────────────────────────────────────────────────
+          CANCELLED=0
+          FORCE_CANCELLED=0
+          FAILED_CANCEL=0
+          TOTAL_WAITING=0
+          TOTAL_LONG_RUNNING=0
+          declare -a REPORT_ROWS=()
+
+          # ── Per-workflow in_progress SLA map ──────────────────────────────
+          # Keys must match the exact workflow filename in .github/workflows/
+          declare -A WORKFLOW_SLA=(
+            ["ci.yml"]="${SLA_CI}"
+            ["container.yml"]="${SLA_CONTAINER}"
+            ["deploy.yml"]="${SLA_DEPLOY}"
+            ["pr-validation.yml"]="${SLA_PR_VALIDATION}"
+          )
+
+          # ── Helpers ───────────────────────────────────────────────────────
+          age_minutes() {
+            # Returns the age of a run (in minutes) given its created_at ISO-8601 timestamp.
+            local created="$1"
+            local now_sec created_sec
+            now_sec=$(date -u +%s)
+            created_sec=$(date -u -d "$created" +%s)
+            echo $(( (now_sec - created_sec) / 60 ))
+          }
+
+          cancel_run() {
+            local repo="$1" run_id="$2" force="$3"
+            local endpoint="repos/${repo}/actions/runs/${run_id}"
+            if [[ "$force" == "true" ]]; then
+              gh api -X POST "${endpoint}/force-cancel" 2>/dev/null && return 0
+              # Fallback: regular cancel if force-cancel is rejected (run may have just finished)
+              gh api -X POST "${endpoint}/cancel"       2>/dev/null && return 0
+            else
+              gh api -X POST "${endpoint}/cancel"       2>/dev/null && return 0
+            fi
+            return 1
+          }
+
+          # ── Main scan loop ─────────────────────────────────────────────────
+          for WORKFLOW in "${!WORKFLOW_SLA[@]}"; do
+            echo "--- Scanning: $WORKFLOW (in_progress SLA: ${WORKFLOW_SLA[$WORKFLOW]}m) ---"
+
+            # Fetch all non-terminal runs for this workflow.
+            # jq outputs one JSON object per line (ndjson) — safe for while-read iteration.
+            while IFS= read -r RUN_JSON; do
+              [[ -z "$RUN_JSON" ]] && continue
+
+              RUN_ID=$(     echo "$RUN_JSON" | jq -r '.id')
+              RUN_NUMBER=$( echo "$RUN_JSON" | jq -r '.run_number')
+              RUN_STATUS=$( echo "$RUN_JSON" | jq -r '.status')
+              CREATED_AT=$( echo "$RUN_JSON" | jq -r '.created_at')
+              HEAD_BRANCH=$(echo "$RUN_JSON" | jq -r '.head_branch // "unknown"')
+
+              AGE_MIN=$(age_minutes "$CREATED_AT")
+              TAKE_ACTION="skip"
+              REASON=""
+
+              # ── Evaluate against SLA thresholds ───────────────────────────
+              if [[ "$RUN_STATUS" == "waiting" || "$RUN_STATUS" == "queued" ]]; then
+                TOTAL_WAITING=$(( TOTAL_WAITING + 1 ))
+                if (( AGE_MIN > PENDING_SLA )); then
+                  TAKE_ACTION="cancel"
+                  REASON="stuck in ${RUN_STATUS} for ${AGE_MIN}m (SLA: ${PENDING_SLA}m)"
+                fi
+
+              elif [[ "$RUN_STATUS" == "in_progress" ]]; then
+                WORKFLOW_SLA_MIN="${WORKFLOW_SLA[$WORKFLOW]:-${RUNNING_SLA}}"
+                if (( AGE_MIN > WORKFLOW_SLA_MIN )); then
+                  TOTAL_LONG_RUNNING=$(( TOTAL_LONG_RUNNING + 1 ))
+                  TAKE_ACTION="force-cancel"
+                  REASON="running for ${AGE_MIN}m (SLA: ${WORKFLOW_SLA_MIN}m)"
+                fi
+              fi
+
+              # ── Act ───────────────────────────────────────────────────────
+              if [[ "$TAKE_ACTION" != "skip" ]]; then
+                RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
+                REPORT_ROWS+=(
+                  "| \`${WORKFLOW}\` | [#${RUN_NUMBER}](${RUN_URL}) | \`${RUN_STATUS}\` | \`${HEAD_BRANCH}\` | ${AGE_MIN}m | ${TAKE_ACTION} — ${REASON} |"
+                )
+
+                if [[ "$DRY_RUN" != "true" ]]; then
+                  FORCE_FLAG="false"
+                  [[ "$TAKE_ACTION" == "force-cancel" ]] && FORCE_FLAG="true"
+
+                  if cancel_run "$REPO" "$RUN_ID" "$FORCE_FLAG"; then
+                    if [[ "$FORCE_FLAG" == "true" ]]; then
+                      echo "::warning title=Force-Cancelled::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                      FORCE_CANCELLED=$(( FORCE_CANCELLED + 1 ))
+                    else
+                      echo "::notice title=Cancelled::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                      CANCELLED=$(( CANCELLED + 1 ))
+                    fi
+                  else
+                    echo "::error title=Cancel failed::${WORKFLOW} #${RUN_NUMBER} — run may have already completed or lacks permission"
+                    FAILED_CANCEL=$(( FAILED_CANCEL + 1 ))
+                  fi
+                else
+                  echo "::notice title=DryRun::Would ${TAKE_ACTION} ${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                fi
+              fi
+
+            done < <(
+              gh api \
+                --paginate \
+                "repos/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=100" \
+                --jq '.workflow_runs[] | select(
+                  .status == "waiting"     or
+                  .status == "queued"      or
+                  .status == "in_progress"
+                )'
+            )
+
+          done
+
+          # ── Step Summary ──────────────────────────────────────────────────
+          {
+            echo "## Watchdog — Stale Run Sweep"
+            echo ""
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "> **Mode: DRY RUN** — detection only. No runs were cancelled."
+              echo ""
+            fi
+
+            echo "| Metric | Count |"
+            echo "|---|---|"
+            echo "| Runs in \`waiting\` / \`queued\` state | ${TOTAL_WAITING} |"
+            echo "| Runs exceeding in_progress SLA | ${TOTAL_LONG_RUNNING} |"
+            echo "| Cancelled (approval gate) | ${CANCELLED} |"
+            echo "| Force-cancelled (SLA breach) | ${FORCE_CANCELLED} |"
+            echo "| Cancel failures | ${FAILED_CANCEL} |"
+            echo ""
+
+            if (( ${#REPORT_ROWS[@]} > 0 )); then
+              echo "### Actioned Runs"
+              echo ""
+              echo "| Workflow | Run | Status | Branch | Age | Action / Reason |"
+              echo "|---|---|---|---|---|---|"
+              printf '%s\n' "${REPORT_ROWS[@]}"
+            else
+              echo "_No stale runs detected. All pipelines are within SLA._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Sweep complete — cancelled=${CANCELLED} force_cancelled=${FORCE_CANCELLED} failed=${FAILED_CANCEL}"
+
+          # Exit non-zero if any cancellation failed, so the sweep itself is visible as failed
+          if (( FAILED_CANCEL > 0 )); then
+            exit 1
+          fi
