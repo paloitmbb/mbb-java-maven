@@ -105,7 +105,7 @@ jobs:
 
       - name: Publish test results
         if: always()
-        uses: EnricoMi/publish-unit-test-result-action@013b82b5ab2f4b8996f689eb33ec94a96f30c437
+        uses: EnricoMi/publish-unit-test-result-action@f3a4c8ee80460c780d2932e55fb914138ecaca2c
         with:
           files: target/surefire-reports/*.xml
 
