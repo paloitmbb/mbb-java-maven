@@ -1,7 +1,7 @@
 # Project Folders Structure Blueprint
 
-> **Technology**: Java · Maven  
-> **Architecture**: Layered / Hexagonal-friendly · Spring Boot ready  
+> **Technology**: Java · Maven
+> **Architecture**: Layered / Hexagonal-friendly · Spring Boot ready
 > **Last Updated**: 2026-03-02
 
 ---
@@ -178,7 +178,7 @@ and `app` matches the `artifactId`. All source sub-packages live here.
 
 ### `src/main/resources/`
 
-Environment configuration, database migrations, and static assets.  
+Environment configuration, database migrations, and static assets.
 `application.yml` holds shared defaults; profile-specific files (`-dev`, `-prod`, etc.) contain
 only the **delta** from the base — keep them minimal.
 
@@ -333,7 +333,7 @@ HTTP Request
 [ Entity / Database ]
 ```
 
-Controllers **must not** directly access repositories.  
+Controllers **must not** directly access repositories.
 Services **must not** return JPA entities — always map to DTOs.
 
 ---
@@ -626,5 +626,5 @@ public class ArchitectureTest {
 | Naming convention changed | Section 5 |
 | New enforcement tool added | Section 11 |
 
-**Owner**: assigned tech lead or architect for the repository.  
+**Owner**: assigned tech lead or architect for the repository.
 **Review cadence**: each sprint review, or immediately after any structural refactoring.

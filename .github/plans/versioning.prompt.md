@@ -1106,4 +1106,3 @@ Before completing implementation, verify all of the following:
 7. **Never set `cancel-in-progress: true`** in deploy.yml — interrupting a `kubectl rollout` corrupts pod state.
 8. **Keep `if: failure()`** on all rollback steps — never `if: always()`.
 9. **Keep existing workflow triggers unchanged** — no changes to `on:` blocks in any workflow file.
-

@@ -244,5 +244,3 @@ jobs:
             target/version-metadata/
           retention-days: 3
           if-no-files-found: error
-
-

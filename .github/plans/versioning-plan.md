@@ -353,4 +353,3 @@ This creates an immutable reference to production commit.
 4. **Implement Phase 3**: Update deploy.yml to use manifests
 5. **Test**: Deploy to staging/prod and verify version consistency
 6. **Document**: Update README with version/deployment strategy
-

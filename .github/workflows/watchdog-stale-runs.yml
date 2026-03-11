@@ -3,20 +3,20 @@
 # =============================================================================
 # Scans all watched workflows for two categories of stale run:
 #
-#   1. PENDING / WAITING — runs stuck in an approval gate or queued state
-#      longer than PENDING_SLA minutes (default: 60).
+#   1. PENDING-APPROVAL (waiting / queued) — runs stuck in an approval gate or
+#      queued state longer than PENDING_SLA minutes (default: 4320 = 3 days).
 #      These are cancelled via the standard cancel endpoint.
 #
-#   2. LONG-RUNNING — in_progress runs that exceed a per-workflow SLA.
-#      These are force-cancelled (GitHub's force-cancel endpoint) so stuck
-#      jobs do not hold a runner or block downstream workflow_run triggers.
+#   2. LONG-RUNNING (in_progress) — in_progress runs that exceed a per-workflow
+#      time SLA. These are force-cancelled (GitHub's force-cancel endpoint) so
+#      stuck jobs do not hold a runner or block downstream workflow_run triggers.
 #      Regular cancel is retried as a fallback if force-cancel is rejected.
 #
 # Watched workflows and their in_progress SLA values (minutes):
-#   ci.yml              → 60  (build + SBOM + CodeQL, parallel)
-#   container.yml       → 30  (docker build + Trivy scan)
-#   deploy.yml          → 60  (SIT 15 + UAT 15 + prod 20 + buffer)
-#   pr-validation.yml   → 30  (parallel gates, normally < 20 min)
+#   ci.yml              → 4320 min / 3 days  (build + SBOM + CodeQL, parallel)
+#   container.yml       → 4320 min / 3 days  (docker build + Trivy scan)
+#   deploy.yml          → 4320 min / 3 days  (SIT → UAT → prod approval chain)
+#   pr-validation.yml   → 4320 min / 3 days  (parallel gates)
 #
 # A step summary is always written with counts and a table of actioned runs.
 # In dry-run mode (manual dispatch only) the report is produced but no runs
@@ -39,15 +39,15 @@ on:
         required: false
         default: false
       pending_sla_minutes:
-        description: 'Max minutes a run may stay in waiting/queued before cancel (default: 60)'
+        description: 'Max minutes a run may stay in waiting/queued (pending-approval) before cancel (default: 4320 = 3 days)'
         type: string
         required: false
-        default: '30'
+        default: '4320'   # 3 days — cancel approval-gate/queued runs older than this
       running_sla_minutes:
-        description: 'Fallback max minutes for in_progress if no per-workflow SLA matches (default: 120)'
+        description: 'Fallback max minutes for long-running in_progress runs if no per-workflow SLA matches (default: 4320 = 3 days)'
         type: string
         required: false
-        default: '120'
+        default: '4320'   # 3 days — force-cancel runs exceeding this duration
 
 concurrency:
   group: watchdog
@@ -68,14 +68,15 @@ jobs:
     timeout-minutes: 15
 
     env:
-      # Per-workflow in_progress SLA (minutes) ─ tuned to normal pipeline durations
-      SLA_CI:             '60'
-      SLA_CONTAINER:      '30'
-      SLA_DEPLOY:         '30'
-      SLA_PR_VALIDATION:  '30'
-      # Approval-gate / queued SLA — sourced from dispatch input or a default
-      PENDING_SLA:        ${{ inputs.pending_sla_minutes || '30' }}
-      RUNNING_SLA:        ${{ inputs.running_sla_minutes || '30' }}
+      # Per-workflow long-running SLA (minutes) — force-cancel in_progress runs older than this
+      # All set to 4320 minutes (3 days) to allow for long approval wait times
+      SLA_CI:             '4320'   # 3 days
+      SLA_CONTAINER:      '4320'   # 3 days
+      SLA_DEPLOY:         '4320'   # 3 days (includes SIT → UAT → prod approval chain)
+      SLA_PR_VALIDATION:  '4320'   # 3 days
+      # Pending-approval / queued SLA — sourced from dispatch input or the 3-day default
+      PENDING_SLA:        ${{ inputs.pending_sla_minutes || '4320' }}   # minutes before cancelling a waiting/queued run
+      RUNNING_SLA:        ${{ inputs.running_sla_minutes || '4320' }}   # fallback for unrecognised workflows
       DRY_RUN:            ${{ inputs.dry_run || 'false' }}
 
     steps:
@@ -92,11 +93,11 @@ jobs:
           set -euo pipefail
 
           # ── Counters ──────────────────────────────────────────────────────
-          CANCELLED=0
-          FORCE_CANCELLED=0
+          CANCELLED_PENDING_APPROVAL=0    # runs cancelled from waiting/queued (pending-approval) state
+          FORCE_CANCELLED_LONG_RUNNING=0  # runs force-cancelled for exceeding in_progress SLA
           FAILED_CANCEL=0
-          TOTAL_WAITING=0
-          TOTAL_LONG_RUNNING=0
+          TOTAL_PENDING_APPROVAL=0        # total runs detected in waiting/queued state
+          TOTAL_LONG_RUNNING=0            # total in_progress runs detected as long-running
           declare -a REPORT_ROWS=()
 
           # ── Per-workflow in_progress SLA map ──────────────────────────────
@@ -133,7 +134,7 @@ jobs:
 
           # ── Main scan loop ─────────────────────────────────────────────────
           for WORKFLOW in "${!WORKFLOW_SLA[@]}"; do
-            echo "--- Scanning: $WORKFLOW (in_progress SLA: ${WORKFLOW_SLA[$WORKFLOW]}m) ---"
+            echo "--- Scanning: $WORKFLOW | long-running SLA: ${WORKFLOW_SLA[$WORKFLOW]}m | pending-approval SLA: ${PENDING_SLA}m ---"
 
             # Fetch all non-terminal runs for this workflow.
             # jq outputs one JSON object per line (ndjson) — safe for while-read iteration.
@@ -147,23 +148,26 @@ jobs:
               HEAD_BRANCH=$(echo "$RUN_JSON" | jq -r '.head_branch // "unknown"')
 
               AGE_MIN=$(age_minutes "$CREATED_AT")
-              TAKE_ACTION="skip"
+              TAKE_ACTION="skip"   # skip | cancel_pending_approval | force_cancel_long_running
+              TAKE_LABEL=""        # human-readable label used in logs and step summary report
               REASON=""
 
               # ── Evaluate against SLA thresholds ───────────────────────────
               if [[ "$RUN_STATUS" == "waiting" || "$RUN_STATUS" == "queued" ]]; then
-                TOTAL_WAITING=$(( TOTAL_WAITING + 1 ))
+                TOTAL_PENDING_APPROVAL=$(( TOTAL_PENDING_APPROVAL + 1 ))
                 if (( AGE_MIN > PENDING_SLA )); then
-                  TAKE_ACTION="cancel"
-                  REASON="stuck in ${RUN_STATUS} for ${AGE_MIN}m (SLA: ${PENDING_SLA}m)"
+                  TAKE_ACTION="cancel_pending_approval"
+                  TAKE_LABEL="cancel (pending-approval)"
+                  REASON="stuck in ${RUN_STATUS} for ${AGE_MIN}m — blocked on approval gate (SLA: ${PENDING_SLA}m)"
                 fi
 
               elif [[ "$RUN_STATUS" == "in_progress" ]]; then
                 WORKFLOW_SLA_MIN="${WORKFLOW_SLA[$WORKFLOW]:-${RUNNING_SLA}}"
                 if (( AGE_MIN > WORKFLOW_SLA_MIN )); then
                   TOTAL_LONG_RUNNING=$(( TOTAL_LONG_RUNNING + 1 ))
-                  TAKE_ACTION="force-cancel"
-                  REASON="running for ${AGE_MIN}m (SLA: ${WORKFLOW_SLA_MIN}m)"
+                  TAKE_ACTION="force_cancel_long_running"
+                  TAKE_LABEL="force-cancel (long-running)"
+                  REASON="running for ${AGE_MIN}m — long-running job exceeded workflow SLA (SLA: ${WORKFLOW_SLA_MIN}m)"
                 fi
               fi
 
@@ -171,27 +175,27 @@ jobs:
               if [[ "$TAKE_ACTION" != "skip" ]]; then
                 RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
                 REPORT_ROWS+=(
-                  "| \`${WORKFLOW}\` | [#${RUN_NUMBER}](${RUN_URL}) | \`${RUN_STATUS}\` | \`${HEAD_BRANCH}\` | ${AGE_MIN}m | ${TAKE_ACTION} — ${REASON} |"
+                  "| \`${WORKFLOW}\` | [#${RUN_NUMBER}](${RUN_URL}) | \`${RUN_STATUS}\` | \`${HEAD_BRANCH}\` | ${AGE_MIN}m | ${TAKE_LABEL} — ${REASON} |"
                 )
 
                 if [[ "$DRY_RUN" != "true" ]]; then
                   FORCE_FLAG="false"
-                  [[ "$TAKE_ACTION" == "force-cancel" ]] && FORCE_FLAG="true"
+                  [[ "$TAKE_ACTION" == "force_cancel_long_running" ]] && FORCE_FLAG="true"
 
                   if cancel_run "$REPO" "$RUN_ID" "$FORCE_FLAG"; then
                     if [[ "$FORCE_FLAG" == "true" ]]; then
-                      echo "::warning title=Force-Cancelled::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
-                      FORCE_CANCELLED=$(( FORCE_CANCELLED + 1 ))
+                      echo "::warning title=Force-Cancelled (Long-Running)::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                      FORCE_CANCELLED_LONG_RUNNING=$(( FORCE_CANCELLED_LONG_RUNNING + 1 ))
                     else
-                      echo "::notice title=Cancelled::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
-                      CANCELLED=$(( CANCELLED + 1 ))
+                      echo "::notice title=Cancelled (Pending-Approval)::${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                      CANCELLED_PENDING_APPROVAL=$(( CANCELLED_PENDING_APPROVAL + 1 ))
                     fi
                   else
                     echo "::error title=Cancel failed::${WORKFLOW} #${RUN_NUMBER} — run may have already completed or lacks permission"
                     FAILED_CANCEL=$(( FAILED_CANCEL + 1 ))
                   fi
                 else
-                  echo "::notice title=DryRun::Would ${TAKE_ACTION} ${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
+                  echo "::notice title=DryRun::Would ${TAKE_LABEL} for ${WORKFLOW} #${RUN_NUMBER} — ${REASON}"
                 fi
               fi
 
@@ -220,10 +224,10 @@ jobs:
 
             echo "| Metric | Count |"
             echo "|---|---|"
-            echo "| Runs in \`waiting\` / \`queued\` state | ${TOTAL_WAITING} |"
-            echo "| Runs exceeding in_progress SLA | ${TOTAL_LONG_RUNNING} |"
-            echo "| Cancelled (approval gate) | ${CANCELLED} |"
-            echo "| Force-cancelled (SLA breach) | ${FORCE_CANCELLED} |"
+            echo "| Pending-approval runs detected (\`waiting\` / \`queued\`) | ${TOTAL_PENDING_APPROVAL} |"
+            echo "| Long-running in-progress runs detected (exceeded SLA) | ${TOTAL_LONG_RUNNING} |"
+            echo "| Cancelled — pending-approval / queued SLA breach | ${CANCELLED_PENDING_APPROVAL} |"
+            echo "| Force-cancelled — long-running in_progress SLA breach | ${FORCE_CANCELLED_LONG_RUNNING} |"
             echo "| Cancel failures | ${FAILED_CANCEL} |"
             echo ""
 
@@ -238,7 +242,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "Sweep complete — cancelled=${CANCELLED} force_cancelled=${FORCE_CANCELLED} failed=${FAILED_CANCEL}"
+          echo "Sweep complete — cancelled_pending_approval=${CANCELLED_PENDING_APPROVAL} force_cancelled_long_running=${FORCE_CANCELLED_LONG_RUNNING} failed=${FAILED_CANCEL}"
 
           # Exit non-zero if any cancellation failed, so the sweep itself is visible as failed
           if (( FAILED_CANCEL > 0 )); then
