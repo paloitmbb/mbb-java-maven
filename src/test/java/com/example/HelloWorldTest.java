@@ -35,7 +35,7 @@ public class HelloWorldTest {
     public void testGetGreetingWithWhitespace() {
         HelloWorld hello = new HelloWorld();
         String result = hello.getGreeting("   ");
-        assertEquals("Hello,    !", result);
+        assertEquals("Hello, World!", result);
     }
 
     @Test

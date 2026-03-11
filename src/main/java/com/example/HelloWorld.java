@@ -42,13 +42,13 @@ public class HelloWorld {
 
     public String getGreeting(String name) {
 
-        if (name == null || name.isEmpty()) {
+        if (name == null || name.isBlank()) {
 
             return "Hello, World!";
 
         }
 
-        return "Hello, " + name + "!";
+        return "Hello, " + name.trim() + "!";
 
     }
 
