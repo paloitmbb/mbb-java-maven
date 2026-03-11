@@ -66,7 +66,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v 6.0.2
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -74,7 +74,7 @@ jobs:
       # Download the JAR produced by the CI build-and-package job.
       # run-id is required to fetch artifacts from an upstream workflow_run.
       - name: Download build artifact from CI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: app-jar
           path: target/
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload Trivy report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: trivy-report
           path: trivy-results.sarif
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload deploy-metadata artifact
         if: steps.push.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: deploy-metadata
           path: |

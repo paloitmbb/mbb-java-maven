@@ -7,9 +7,6 @@
 # Each stage delegates to the shared reusable template:
 #   .github/workflows/deploy-environment.yml
 #
-# CRITICAL: cancel-in-progress MUST be false — interrupting a kubectl rollout
-# can leave pods in inconsistent states and cause data corruption.
-#
 # Image tag is read from the deploy-metadata artifact produced by container.yml.
 # Never re-derive the SHA here — it can drift across workflow_run hops.
 # =============================================================================
@@ -64,7 +61,6 @@ jobs:
       timeout_minutes:    15
       health_retries:     5
       retry_delay:        10
-      rollout_timeout:    '5m'
       create_git_tag:     false
       persist_credentials: false
       container_run_id:   ${{ github.event.workflow_run.id || inputs.container_run_id }}
@@ -92,7 +88,6 @@ jobs:
       timeout_minutes:    15
       health_retries:     5
       retry_delay:        10
-      rollout_timeout:    '5m'
       create_git_tag:     false
       persist_credentials: false
       container_run_id:   ${{ github.event.workflow_run.id || inputs.container_run_id }}
@@ -121,7 +116,6 @@ jobs:
       timeout_minutes:    20
       health_retries:     10
       retry_delay:        15
-      rollout_timeout:    '10m'
       create_git_tag:     true
       persist_credentials: true
       container_run_id:   ${{ github.event.workflow_run.id || inputs.container_run_id }}

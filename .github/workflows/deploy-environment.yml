@@ -55,11 +55,6 @@ on:
         type: number
         required: false
         default: 10
-      rollout_timeout:
-        description: 'kubectl rollout status --timeout value (e.g. 5m, 10m)'
-        type: string
-        required: false
-        default: '5m'
       create_git_tag:
         description: 'Create an immutable Git tag on successful deploy (production only)'
         type: boolean
@@ -93,13 +88,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 1
           persist-credentials: ${{ inputs.persist_credentials }}
 
       - name: Download deploy-metadata artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           name: deploy-metadata
           run-id: ${{ inputs.container_run_id }}
@@ -145,8 +140,6 @@ jobs:
 
       - name: Install and convert kubelogin to AAD non-interactive
         # Use azure/aks-set-context to handle login properly if possible,
-        # but for direct az cli approach, we must convert the kubeconfig
-        # to a service-principal/workload-identity friendly format.
         run: |
           sudo az aks install-cli
           kubelogin convert-kubeconfig -l azurecli
