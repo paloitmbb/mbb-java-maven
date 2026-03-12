@@ -103,11 +103,10 @@ jobs:
       # TODO: set CONTAINER_REGISTRY variable (e.g. myregistry.azurecr.io) — ACR login server; used for docker-login and image reference
       # TODO: set APP_NAME variable (e.g. hello-java) — image repository within the registry; change per repo when reusing this workflow
       - name: Read deploy metadata
-        id: meta
         run: |
           IMAGE_TAG=$(cat image-tag)
-          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "image=${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "IMAGE=${{ vars.CONTAINER_REGISTRY }}/${{ vars.APP_NAME }}:${IMAGE_TAG}" >> "$GITHUB_ENV"
 
       # TODO: configure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID secrets (Azure service principal with OIDC federated credentials)
       - name: Azure login (OIDC)
@@ -129,7 +128,7 @@ jobs:
 
       - name: Pull image from registry
         run: |
-          docker pull "${{ steps.meta.outputs.image }}"
+          docker pull "$IMAGE"
 
       - name: Get AKS credentials
         run: |
@@ -146,7 +145,7 @@ jobs:
 
       - name: Update manifest image tag
         run: |
-          sed -i "s|image: REPLACE_ME|image: ${{ steps.meta.outputs.image }}|g" k8s/deployment.yaml
+          sed -i "s|image: REPLACE_ME|image: ${IMAGE}|g" k8s/deployment.yaml
 
       - name: Apply manifest (rolling update)
         run: |
@@ -167,8 +166,9 @@ jobs:
       - name: Create immutable Git tag
         if: success() && inputs.create_git_tag && inputs.environment == 'production'
         run: |
-          IMAGE_TAG="${{ steps.meta.outputs.image_tag }}"
+          TARGET_SHA="${{ inputs.head_sha || github.sha }}"
+          TAGGED_AT="$(date -u +"%Y-%m-%dT%H:%MZ")"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${IMAGE_TAG}" "${{ inputs.head_sha || github.sha }}"
+          git tag -a "${IMAGE_TAG}" "${TARGET_SHA}" -m "release ${IMAGE_TAG} (production) from ${TARGET_SHA} at ${TAGGED_AT}"
           git push origin "${IMAGE_TAG}"
