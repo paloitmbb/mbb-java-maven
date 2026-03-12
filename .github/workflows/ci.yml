@@ -55,7 +55,7 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: sbom-${{ steps.short_sha.outputs.sha }}
           path: sbom-${{ steps.short_sha.outputs.sha }}.json
@@ -173,14 +173,14 @@ jobs:
 
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: test-reports
           path: target/surefire-reports/
           retention-days: 7
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: coverage-report
           path: target/site/jacoco/
@@ -224,7 +224,7 @@ jobs:
 
       # - name: Upload dependency check report
       #   if: always()
-      #   uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      #   uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       #   with:
       #     name: dependency-check-report
       #     path: target/dependency-check-report.*
@@ -236,7 +236,7 @@ jobs:
           subject-path: target/${{ steps.named_jar.outputs.filename }}
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: app-jar
           path: |
