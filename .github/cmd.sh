@@ -34,5 +34,4 @@ az identity federated-credential create \
   --subject repo:paloitmbb/mbb-java-maven:ref:refs/heads/main \
   --audiences api://AzureADTokenExchange
 
-  #Final test
-  #Testing
+#Testing
