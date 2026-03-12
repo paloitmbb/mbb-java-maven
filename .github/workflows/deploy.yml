@@ -42,8 +42,6 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Job 1 — SIT: auto-deploys, no approval gate
-  # TODO: set AKS_CLUSTER_NAME_SIT variable (e.g. aks-sit)
-  # TODO: set AKS_RESOURCE_GROUP_SIT variable (e.g. rg-sit)
   # (health_url omitted — hello-java is a plain console app with no HTTP server)
   # ---------------------------------------------------------------------------
   deploy-sit:
@@ -55,8 +53,6 @@ jobs:
     with:
       environment:        sit
       namespace:          sit
-      aks_cluster_name:   ${{ vars.AKS_CLUSTER_NAME_SIT }}
-      aks_resource_group: ${{ vars.AKS_RESOURCE_GROUP_SIT }}
       timeout_minutes:    15
       health_retries:     5
       retry_delay:        10
@@ -67,8 +63,6 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Job 2 — UAT: requires 1 approval (configure in environment: uat settings)
-  # TODO: set AKS_CLUSTER_NAME_UAT variable (e.g. aks-uat)
-  # TODO: set AKS_RESOURCE_GROUP_UAT variable (e.g. rg-uat)
   # (health_url omitted — hello-java is a plain console app with no HTTP server)
   # ---------------------------------------------------------------------------
   deploy-uat:
@@ -78,8 +72,6 @@ jobs:
     with:
       environment:        uat
       namespace:          uat
-      aks_cluster_name:   ${{ vars.AKS_CLUSTER_NAME_UAT }}
-      aks_resource_group: ${{ vars.AKS_RESOURCE_GROUP_UAT }}
       timeout_minutes:    15
       health_retries:     5
       retry_delay:        10
@@ -91,8 +83,6 @@ jobs:
   # ---------------------------------------------------------------------------
   # Job 3 — Production: requires 2 approvals, main branch only.
   # Creates an immutable Git tag on success.
-  # TODO: set AKS_CLUSTER_NAME_PROD variable (e.g. aks-prod)
-  # TODO: set AKS_RESOURCE_GROUP_PROD variable (e.g. rg-prod)
   # (health_url omitted — hello-java is a plain console app with no HTTP server)
   # ---------------------------------------------------------------------------
   deploy-production:
@@ -105,8 +95,6 @@ jobs:
     with:
       environment:        production
       namespace:          production
-      aks_cluster_name:   ${{ vars.AKS_CLUSTER_NAME_PROD }}
-      aks_resource_group: ${{ vars.AKS_RESOURCE_GROUP_PROD }}
       timeout_minutes:    20
       health_retries:     10
       retry_delay:        15
