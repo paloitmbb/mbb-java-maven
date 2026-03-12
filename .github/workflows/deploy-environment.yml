@@ -27,14 +27,6 @@ on:
         description: 'Kubernetes namespace to deploy into'
         type: string
         required: true
-      aks_cluster_name:
-        description: 'AKS cluster name'
-        type: string
-        required: true
-      aks_resource_group:
-        description: 'AKS resource group'
-        type: string
-        required: true
       health_url:
         description: 'Base URL for /actuator/health health check (leave empty to skip — plain apps with no HTTP server)'
         type: string
@@ -130,11 +122,15 @@ jobs:
         run: |
           docker pull "$IMAGE"
 
+      # AKS_CLUSTER_NAME and AKS_RESOURCE_GROUP must be set as environment-scoped
+      # variables in the GitHub environment (sit | uat | production).
+      # They are read here — not passed as inputs — because env-scoped vars are
+      # only available in the job that declares environment: ${{ inputs.environment }}.
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
-            --name ${{ inputs.aks_cluster_name }} \
-            --resource-group ${{ inputs.aks_resource_group }} \
+            --name "${{ vars.AKS_CLUSTER_NAME }}" \
+            --resource-group "${{ vars.AKS_RESOURCE_GROUP }}" \
             --overwrite-existing
 
       - name: Install and convert kubelogin to AAD non-interactive
