@@ -33,3 +33,5 @@ az identity federated-credential create \
   --issuer https://token.actions.githubusercontent.com \
   --subject repo:paloitmbb/mbb-java-maven:ref:refs/heads/main \
   --audiences api://AzureADTokenExchange
+
+  #Final test
