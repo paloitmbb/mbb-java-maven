@@ -39,7 +39,7 @@ jobs:
           cache: maven
 
       - name: Submit dependency graph
-        uses: advanced-security/maven-dependency-submission-action@600bc1c22be12f87e10805bf74dc1633d13095ec   #v 5.0.0
+        uses: advanced-security/maven-dependency-submission-action@df268dd1684fb95352aa463056e3cf41f9acb94b
 
       - name: Shorten commit SHA to 7 chars
         id: short_sha
