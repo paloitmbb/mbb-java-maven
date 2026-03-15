@@ -2,6 +2,7 @@
 name: git-commit
 description: 'Execute git commit with conventional commit message analysis, intelligent staging, and message generation. Use when user asks to commit changes, create a git commit, or mentions "/commit". Supports: (1) Auto-detecting type and scope from changes, (2) Generating conventional commit messages from diff, (3) Interactive commit with optional type/scope/description overrides, (4) Intelligent file staging for logical grouping'
 license: MIT
+model: GPT-5 mini
 allowed-tools: Bash
 ---
 
@@ -10,27 +11,6 @@ allowed-tools: Bash
 ## Overview
 
 Create standardized, semantic git commits using the Conventional Commits specification. Analyze the actual diff to determine appropriate type, scope, and message.
-
-## When to Use This Skill
-
-Use the git-commit skill in the following scenarios:
-
-- **Session-based commits:**
-	- Group related changes in a single session before committing
-	- Work on a feature or bugfix that spans multiple files or steps
-	- Review, stage, and commit changes interactively
-	- Ensure conventional commit message standards for all session changes
-	- Generate a breakdown of commit types and scopes for a session
-	- Auto-stage files based on logical grouping within a session
-	- Preview or edit the commit message before finalizing
-
-- **General usage:**
-	- Commit changes, create a git commit, or use "/commit"
-	- Generate conventional commit messages from diffs
-	- Intelligent file staging for logical grouping
-	- Auto-detect type and scope from changes
-	- Interactive commit with optional type/scope/description overrides
-	- Ensure commit message consistency and quality
 
 ## Conventional Commit Format
 
