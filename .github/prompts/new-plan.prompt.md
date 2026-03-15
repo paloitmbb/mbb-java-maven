@@ -3,7 +3,7 @@ name: new-plan
 description: Advanced structured plan generator with context awareness, explicit validation, and machine-readable outputs. Produces sequential plan files (plan1.md, plan2.md...) following strict phase gates.
 agent: Plan
 argument-hint: Provide a concise objective, constraints, desired deadline, and any important context or prior decisions to consider.
-model: claude-sonnet-4.5
+model: Claude Sonnet 4.6 (copilot)
 ---
 
 # AI Agent Instructions: Structured Plan Generation
